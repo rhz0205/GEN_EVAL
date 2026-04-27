@@ -1,0 +1,27 @@
+{
+  "manifest_path": "examples/manifest_example.json",
+  "output_path": "outputs/evaluation_results.json",
+  "metrics": {
+    "fvd": {
+      "enabled": true
+    },
+    "temporal_consistency": {
+      "enabled": true
+    },
+    "subject_consistency": {
+      "enabled": true
+    },
+    "temporal_semantic_consistency": {
+      "enabled": true
+    },
+    "depth_consistency": {
+      "enabled": true
+    },
+    "object_coherence": {
+      "enabled": true
+    },
+    "cross_view_consistency": {
+      "enabled": true
+    }
+  }
+}

@@ -1,0 +1,40 @@
+# Local reference source
+worldlens/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.env
+.venv
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Outputs
+outputs/*
+!outputs/.gitkeep
+
+# Pretrained weights
+pretrained_models/*
+!pretrained_models/.gitkeep
+
+# Large datasets
+data/
+datasets/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
