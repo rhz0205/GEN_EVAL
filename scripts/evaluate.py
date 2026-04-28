@@ -38,7 +38,6 @@ def main() -> int:
     results = run_evaluation(resolved_config)
 
     # 3. 构建结果负载，记录配置、指标输出和运行命令等信息
-    # TODO: 删除 git_commit 字段，并在对应 build_result_payload 删除 git_commit 参数
     payload = build_result_payload(
         resolved_config,
         results,

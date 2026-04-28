@@ -151,7 +151,7 @@ def main() -> int:
             dedupe=not args.no_dedupe,
             check_exists=args.check_exists,
             keep_extra_fields=not args.drop_extra_fields,
-            detect_camera_videos_dirs=args.detect_camera_videos,
+            detect_camera_videos=args.detect_camera_videos,
             primary_camera=args.primary_camera,
             camera_ext=args.camera_ext,
             keep_front_tele=args.keep_front_tele,

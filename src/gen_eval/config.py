@@ -30,7 +30,6 @@ def resolve_metric_config() -> tuple[Path, dict[str, Any]]:
     return metric_config_path, load_yaml(metric_config_path)
 
 
-# TODO: 若改为 ray shard 方案，`runtime_config.setdefault("num_workers", 0)` 中的 num_workers 参数调整为 max_in_flight
 def normalize_runtime_config(runtime: dict[str, Any] | None) -> dict[str, Any]:
     """规范化运行时配置，设置默认值并验证字段类型
     - ray: 使用 Ray 分布式执行，默认地址为 "auto"，默认并发任务上限数为0
@@ -47,7 +46,6 @@ def normalize_runtime_config(runtime: dict[str, Any] | None) -> dict[str, Any]:
     runtime_config["backend"] = backend_name
 
     if backend_name == "ray":
-        runtime_config.setdefault("ray_address", "auto")
         runtime_config.setdefault("ray_address", "auto")
         runtime_config.setdefault("shard_size", 1)
         runtime_config.setdefault("max_in_flight", 0)

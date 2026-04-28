@@ -44,7 +44,7 @@ def to_jsonable(value: Any) -> Any:
     return str(value)
 
 
-def detect_camera_videos(
+def _detect_camera_videos(
     video_path: str,
     primary_camera: str = "camera_front",
     camera_ext: str = ".mp4",
@@ -248,7 +248,7 @@ def convert_pkl_to_manifest(
             "fallback_primary_camera": False,
         }
         if detect_camera_videos:
-            camera_info = detect_camera_videos(
+            camera_info = _detect_camera_videos(
                 original_video,
                 primary_camera=primary_camera,
                 camera_ext=camera_ext,
