@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Inspect a GEN_EVAL manifest file."""
-
 from __future__ import annotations
 
 import argparse
@@ -14,7 +12,6 @@ if str(SRC_ROOT) not in sys.path:
 
 from gen_eval.dataset import format_manifest_summary
 
-# 在执行评估前，检查 manifest 是否可用
 def main() -> int:
     parser = argparse.ArgumentParser(description="Inspect a GEN_EVAL manifest.")
     parser.add_argument("--manifest", required=True, help="Path to manifest JSON file.")
@@ -26,7 +23,6 @@ def main() -> int:
 
     manifest_path = Path(args.manifest)
     return 0 if manifest_path.exists() else 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

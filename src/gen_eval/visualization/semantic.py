@@ -7,7 +7,6 @@ from typing import Any
 from .layout import FIXED_VIEW_ORDER, make_6v_montage_frame
 from .video_io import read_all_frames, resize_frame, write_video
 
-
 def build_semantic_outputs(
     sample_id: str,
     metadata: dict[str, Any],
@@ -73,7 +72,6 @@ def build_semantic_outputs(
         )
     return True, "ok"
 
-
 def load_view_semantic_masks(metadata: dict[str, Any], view_name: str) -> list[Any]:
     semantic_masks = metadata.get("semantic_masks")
     if isinstance(semantic_masks, dict):
@@ -101,7 +99,6 @@ def load_view_semantic_masks(metadata: dict[str, Any], view_name: str) -> list[A
         return load_segmentation_video(segmentation_video)
     raise SkipSemantic(f"No semantic data for view {view_name}.")
 
-
 def load_semantic_masks(raw_value: Any) -> list[Any]:
     import numpy as np  # type: ignore
 
@@ -123,7 +120,6 @@ def load_semantic_masks(raw_value: Any) -> list[Any]:
         raise SkipSemantic("semantic_masks must have shape [T, H, W].")
     return [data[index] for index in range(data.shape[0])]
 
-
 def load_segmentation_frames(raw_value: Any) -> list[Any]:
     if raw_value is None:
         raise SkipSemantic("segmentation_frames entry is missing.")
@@ -141,7 +137,6 @@ def load_segmentation_frames(raw_value: Any) -> list[Any]:
         return [read_image_rgb(raw_value)] if read_image_rgb(raw_value) is not None else []
     raise SkipSemantic("Unsupported segmentation_frames value.")
 
-
 def load_segmentation_video(raw_value: Any) -> list[Any]:
     if raw_value is None or not isinstance(raw_value, str):
         raise SkipSemantic("segmentation_video must be a file path.")
@@ -149,7 +144,6 @@ def load_segmentation_video(raw_value: Any) -> list[Any]:
     if not path.exists():
         raise SkipSemantic(f"segmentation_video path does not exist: {raw_value}")
     return read_all_frames(path)
-
 
 def read_image_rgb(path_value: Any) -> Any | None:
     if not isinstance(path_value, str):
@@ -162,7 +156,6 @@ def read_image_rgb(path_value: Any) -> Any | None:
     if image_bgr is None:
         return None
     return cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-
 
 def resolve_palette(metadata: dict[str, Any], semantic_masks: list[Any]) -> list[list[int]]:
     palette_value = metadata.get("segmentation_palette")
@@ -180,7 +173,6 @@ def resolve_palette(metadata: dict[str, Any], semantic_masks: list[Any]) -> list
             continue
     return make_palette(max_label + 1)
 
-
 def make_palette(num_colors: int) -> list[list[int]]:
     palette: list[list[int]] = []
     for index in range(max(1, num_colors)):
@@ -193,7 +185,6 @@ def make_palette(num_colors: int) -> list[list[int]]:
         )
     return palette
 
-
 def overlay_semantic_mask(frame_rgb: Any, label_mask: Any, palette: list[list[int]]) -> Any:
     import numpy as np  # type: ignore
 
@@ -205,11 +196,9 @@ def overlay_semantic_mask(frame_rgb: Any, label_mask: Any, palette: list[list[in
         color_mask[label_mask == label] = color
     return (0.6 * frame_rgb + 0.4 * color_mask).astype("uint8")
 
-
 def resize_label_mask(mask: Any, width: int, height: int) -> Any:
     cv2 = _get_cv2()
     return cv2.resize(mask.astype("uint8"), (width, height), interpolation=cv2.INTER_NEAREST)
-
 
 def make_sequence_montage(
     frames_by_view: dict[str, list[Any]],
@@ -239,13 +228,10 @@ def make_sequence_montage(
         )
     return montage_frames
 
-
 class SkipSemantic(RuntimeError):
     pass
-
 
 def _get_cv2() -> Any:
     import cv2  # type: ignore
 
     return cv2
-

@@ -3,12 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-
 def get_cv2() -> Any:
     import cv2  # type: ignore
 
     return cv2
-
 
 def inspect_video(path: str | Path) -> dict[str, Any]:
     video_path = Path(path)
@@ -57,7 +55,6 @@ def inspect_video(path: str | Path) -> dict[str, Any]:
         info["reason"] = f"{type(exc).__name__}: {exc}"
         return info
 
-
 def read_all_frames(video_path: str | Path, max_frames: int | None = None) -> list[Any]:
     cv2 = get_cv2()
     cap = cv2.VideoCapture(str(video_path))
@@ -76,7 +73,6 @@ def read_all_frames(video_path: str | Path, max_frames: int | None = None) -> li
     cap.release()
     return frames
 
-
 def read_selected_frames(video_path: str | Path, frame_indices: list[int]) -> dict[int, Any]:
     cv2 = get_cv2()
     cap = cv2.VideoCapture(str(video_path))
@@ -93,26 +89,21 @@ def read_selected_frames(video_path: str | Path, frame_indices: list[int]) -> di
     cap.release()
     return result
 
-
 def read_first_frame(video_path: str | Path) -> Any | None:
     frames = read_all_frames(video_path, max_frames=1)
     return frames[0] if frames else None
-
 
 def resize_frame(frame_rgb: Any, width: int, height: int) -> Any:
     cv2 = get_cv2()
     return cv2.resize(frame_rgb, (int(width), int(height)))
 
-
 def rgb_to_bgr(frame_rgb: Any) -> Any:
     cv2 = get_cv2()
     return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
-
 def bgr_to_rgb(frame_bgr: Any) -> Any:
     cv2 = get_cv2()
     return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-
 
 def write_video(
     output_path: str | Path,
@@ -137,13 +128,11 @@ def write_video(
     finally:
         writer.release()
 
-
 def write_image(output_path: str | Path, frame_rgb: Any) -> None:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     cv2 = get_cv2()
     cv2.imwrite(str(output), rgb_to_bgr(frame_rgb))
-
 
 def blank_frame(width: int, height: int, color: tuple[int, int, int] = (24, 24, 24)) -> Any:
     import numpy as np  # type: ignore
@@ -151,7 +140,6 @@ def blank_frame(width: int, height: int, color: tuple[int, int, int] = (24, 24, 
     frame = np.zeros((int(height), int(width), 3), dtype=np.uint8)
     frame[:, :] = color
     return frame
-
 
 def draw_text_box(
     frame_rgb: Any,
@@ -191,4 +179,3 @@ def draw_text_box(
             cv2.LINE_AA,
         )
     return bgr_to_rgb(frame_bgr)
-

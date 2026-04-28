@@ -15,7 +15,6 @@ ADJACENT_CAMERA_PAIRS: tuple[tuple[str, str, str, str], ...] = (
     ("camera_rear_right", "camera_rear", "left", "right"),
 )
 
-
 def build_view_match_outputs(
     sample_id: str,
     camera_videos: dict[str, str],
@@ -84,7 +83,6 @@ def build_view_match_outputs(
         return False, "No adjacent camera pairs produced match visualizations."
     return True, "ok"
 
-
 def ensure_loftr_runtime(repo_path: str, weight_path: str) -> dict[str, Any]:
     runtime: dict[str, Any] = {"error": None}
     try:
@@ -123,7 +121,6 @@ def ensure_loftr_runtime(repo_path: str, weight_path: str) -> dict[str, Any]:
     runtime["device"] = device
     return runtime
 
-
 def select_pair_frames(
     video_path: str,
     frame_indices: list[int] | None,
@@ -135,14 +132,12 @@ def select_pair_frames(
         max_frames = 1
     return {index: frame for index, frame in enumerate(read_selected_frames(video_path, list(range(max_frames))).values())}
 
-
 def crop_edge(frame_rgb: Any, side: str) -> Any:
     width = frame_rgb.shape[1]
     crop_width = max(1, int(width / 3))
     if side == "left":
         return frame_rgb[:, :crop_width]
     return frame_rgb[:, width - crop_width :]
-
 
 def match_loftr(runtime: dict[str, Any], crop_a: Any, crop_b: Any) -> dict[str, Any]:
     torch = runtime["torch"]
@@ -166,7 +161,6 @@ def match_loftr(runtime: dict[str, Any], crop_a: Any, crop_b: Any) -> dict[str, 
         "mkpts1": mkpts1.detach().cpu().numpy(),
         "mconf": mconf.detach().cpu().numpy(),
     }
-
 
 def draw_match_image(
     crop_a: Any,
@@ -197,13 +191,10 @@ def draw_match_image(
     rendered = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
     return draw_text_box(rendered, title_lines)
 
-
 def confidence_color(confidence: float) -> tuple[int, int, int]:
     value = max(0.0, min(1.0, float(confidence)))
     return (64, int(255 * value), int(255 * (1.0 - value)))
 
-
 def mean_confidence(values: Any) -> float:
     items = [float(value) for value in values] if values is not None else []
     return sum(items) / len(items) if items else 0.0
-

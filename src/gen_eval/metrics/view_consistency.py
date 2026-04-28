@@ -1,5 +1,3 @@
-"""Cross-view consistency metric for fixed multi-camera driving videos."""
-
 from __future__ import annotations
 
 import math
@@ -18,9 +16,7 @@ ADJACENT_CAMERA_PAIRS: tuple[tuple[str, str, str, str], ...] = (
     ("camera_rear_right", "camera_rear", "left", "right"),
 )
 
-
 class ViewConsistencyMetric:
-    """Compute continuous cross-view consistency from adjacent camera overlaps."""
 
     name = "view_consistency"
 
@@ -338,15 +334,12 @@ class ViewConsistencyMetric:
             "reason": reason,
         }
 
-
 ViewConsistency = ViewConsistencyMetric
-
 
 def mean_or_none(values: list[float]) -> float | None:
     if not values:
         return None
     return float(sum(values) / len(values))
-
 
 def is_finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(float(value))

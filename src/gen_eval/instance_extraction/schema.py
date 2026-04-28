@@ -12,7 +12,6 @@ EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
     "camera_rear",
 )
 
-
 @dataclass
 class DetectionBox:
     frame_index: int
@@ -26,7 +25,6 @@ class DetectionBox:
             "confidence": float(self.confidence),
         }
 
-
 @dataclass
 class TrackDetection:
     frame_index: int
@@ -36,7 +34,6 @@ class TrackDetection:
     class_scores: dict[str, float] = field(default_factory=dict)
     embedding: list[float] | None = None
     identity: str | None = None
-
 
 @dataclass
 class InstanceTrack:
@@ -77,7 +74,6 @@ class InstanceTrack:
             "identities": self.identities,
         }
 
-
 @dataclass
 class ViewExtractionResult:
     view_name: str
@@ -88,7 +84,6 @@ class ViewExtractionResult:
     def to_metadata_value(self) -> list[dict[str, Any]]:
         return [track.to_dict() for track in self.tracks]
 
-
 @dataclass
 class SampleExtractionResult:
     sample_id: str
@@ -96,4 +91,3 @@ class SampleExtractionResult:
     instance_tracks: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     reason: str | None = None
     view_results: list[ViewExtractionResult] = field(default_factory=list)
-

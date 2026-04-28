@@ -13,7 +13,6 @@ FIXED_VIEW_ORDER: tuple[str, ...] = (
     "camera_rear",
 )
 
-
 def make_labeled_tile(
     frame_rgb: Any | None,
     *,
@@ -31,7 +30,6 @@ def make_labeled_tile(
     if extra_lines:
         lines.extend(extra_lines)
     return draw_text_box(tile, lines)
-
 
 def make_6v_montage_frame(
     tiles_by_view: dict[str, Any | None],
@@ -59,4 +57,3 @@ def make_6v_montage_frame(
             )
         rows.append(np.concatenate(row_tiles, axis=1))
     return np.concatenate(rows, axis=0)
-

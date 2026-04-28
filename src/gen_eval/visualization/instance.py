@@ -6,7 +6,6 @@ from typing import Any
 from .layout import FIXED_VIEW_ORDER, make_6v_montage_frame
 from .video_io import read_all_frames, resize_frame, write_video
 
-
 def build_instance_outputs(
     sample_id: str,
     metadata: dict[str, Any],
@@ -66,7 +65,6 @@ def build_instance_outputs(
         )
     return True, "ok"
 
-
 def render_track_overlay_sequence(
     frames_rgb: list[Any],
     raw_tracks: list[dict[str, Any]],
@@ -113,7 +111,6 @@ def render_track_overlay_sequence(
                 )
     return overlays
 
-
 def normalize_instance_tracks(raw_tracks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for raw_track in raw_tracks:
@@ -125,14 +122,12 @@ def normalize_instance_tracks(raw_tracks: list[dict[str, Any]]) -> list[dict[str
         normalized.append(track)
     return normalized
 
-
 def extract_bbox(box_item: dict[str, Any]) -> list[float] | None:
     for key in ("bbox", "box", "boxes_2d"):
         value = box_item.get(key)
         if isinstance(value, (list, tuple)) and len(value) >= 4:
             return [float(value[0]), float(value[1]), float(value[2]), float(value[3])]
     return None
-
 
 def build_track_label(track: dict[str, Any], box_item: dict[str, Any]) -> str:
     object_id = str(track.get("object_id") or "track")
@@ -141,7 +136,6 @@ def build_track_label(track: dict[str, Any], box_item: dict[str, Any]) -> str:
     if isinstance(confidence, (int, float)):
         return f"{object_id} | {category} | {float(confidence):.2f}"
     return f"{object_id} | {category}"
-
 
 def draw_track_box(
     frame_rgb: Any,
@@ -166,7 +160,6 @@ def draw_track_box(
     )
     frame_rgb[:, :] = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
-
 def color_for_key(key: str) -> tuple[int, int, int]:
     seed = abs(hash(key))
     return (
@@ -174,7 +167,6 @@ def color_for_key(key: str) -> tuple[int, int, int]:
         64 + (seed * 67) % 192,
         64 + (seed * 97) % 192,
     )
-
 
 def make_sequence_montage(
     frames_by_view: dict[str, list[Any]],
@@ -203,9 +195,7 @@ def make_sequence_montage(
         )
     return result
 
-
 def _get_cv2() -> Any:
     import cv2  # type: ignore
 
     return cv2
-

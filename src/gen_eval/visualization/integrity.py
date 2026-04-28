@@ -5,7 +5,6 @@ from typing import Any
 from .layout import FIXED_VIEW_ORDER, make_6v_montage_frame
 from .video_io import inspect_video, read_first_frame
 
-
 def build_integrity_overview_image(
     camera_videos: dict[str, str],
     *,
@@ -42,12 +41,10 @@ def build_integrity_overview_image(
         extra_lines_by_view=extra_lines,
     )
 
-
 def format_number(value: Any) -> str:
     if isinstance(value, (int, float)):
         return f"{float(value):.4g}"
     return "n/a"
-
 
 def format_resolution(info: dict[str, Any]) -> str:
     width = info.get("width")
@@ -55,4 +52,3 @@ def format_resolution(info: dict[str, Any]) -> str:
     if isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0:
         return f"{width}x{height}"
     return "n/a"
-

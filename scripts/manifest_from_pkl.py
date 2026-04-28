@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Convert a category-indexed pickle file into a GEN_EVAL manifest."""
-
 from __future__ import annotations
 
 import argparse
@@ -14,7 +12,6 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from gen_eval.manifest_builder import build_manifest_from_pkl, summarize_records
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -45,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--keys",
         default=None,
         help="Comma-separated top-level keys to include. Default: all keys.",
-    )  # 用于控制从 pkl 顶层类别中选哪些 key、每类保留多少、是否随机采样、是否全局采样
+    )
     parser.add_argument(
         "--limit-per-key",
         type=int,
@@ -129,7 +126,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     return parser
 
-
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -181,7 +177,6 @@ def main() -> int:
         keep_front_tele=result["keep_front_tele"],
     )
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

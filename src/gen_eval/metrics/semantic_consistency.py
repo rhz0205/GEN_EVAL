@@ -1,13 +1,22 @@
-"""Semantic consistency metric for fixed multi-view prepared segmentation data."""
-
 from __future__ import annotations
 
 import json
 from pathlib import Path
 from typing import Any
 
+import imageio.v2 as imageio
+import numpy as np
+from PIL import Image
+from scipy.optimize import linear_sum_assignment
+from scipy.spatial import cKDTree
+from scipy.spatial.distance import jensenshannon
+from skimage.measure import label, regionprops
+from skimage.morphology import erosion, square
+
 from gen_eval.schemas import GenerationSample
 
+
+# 固定自动驾驶环视相机视角顺序；语义一致性评价会优先按这些视角读取多视角语义参考。
 EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
     "camera_front",
     "camera_cross_left",
@@ -17,17 +26,21 @@ EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
     "camera_rear",
 )
 
+# 语义一致性总分采用固定权重组合，依次对应标签翻转稳定性、语义区域稳定性和类别分布稳定性。
+SEMANTIC_WEIGHTS: tuple[float, float, float] = (0.5, 0.4, 0.1)
+IGNORE_LABEL = -1
 
-class SemanticConsistencyMetric:
-    """Measure temporal consistency from prepared semantic masks or segmentations."""
 
+class SemanticConsistency:
     name = "semantic_consistency"
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
+        # 初始化语义一致性指标配置；权重固定，输入字段名和阈值参数保留可配置能力。
         self.config = config or {}
-        self.weights = (0.4, 0.4, 0.2)
-        self.erosion_k = 2
-        self.min_iou = 0.1
+        self.weights = SEMANTIC_WEIGHTS
+        self.erosion_k = int(self.config.get("erosion_k", 2))
+        self.min_iou = float(self.config.get("min_iou", 0.1))
+        self.ignore_label = int(self.config.get("ignore_label", IGNORE_LABEL))
         self.approximate_palette = bool(self.config.get("approximate_palette", True))
         self.ignore_color = self._normalize_color(
             self.config.get("ignore_color", [255, 255, 0])
@@ -48,28 +61,7 @@ class SemanticConsistencyMetric:
         )
 
     def evaluate(self, samples: list[GenerationSample]) -> dict[str, Any]:
-        runtime, reason = self._get_runtime()
-        if runtime is None:
-            return {
-                "metric": self.name,
-                "status": "skipped",
-                "num_samples": len(samples),
-                "valid_sample_count": 0,
-                "mean_semantic_consistency_score": None,
-                "details": {
-                    "evaluated_samples": [],
-                    "skipped_samples": [
-                        {
-                            "sample_id": getattr(sample, "sample_id", "unknown"),
-                            "reason": reason,
-                        }
-                        for sample in samples
-                    ],
-                    "failed_samples": [],
-                },
-                "reason": reason,
-            }
-
+        # 遍历样本并收集成功、跳过和失败结果，保证单个样本异常不会中断整体指标计算。
         evaluated_samples: list[dict[str, Any]] = []
         skipped_samples: list[dict[str, Any]] = []
         failed_samples: list[dict[str, Any]] = []
@@ -78,48 +70,39 @@ class SemanticConsistencyMetric:
         for sample in samples:
             sample_id = getattr(sample, "sample_id", None) or "unknown"
             try:
-                sample_result = self._evaluate_sample(sample, runtime)
-            except Exception as exc:  # pragma: no cover - defensive runtime guard
+                sample_result = self._evaluate_sample(sample)
+            except Exception as exc:
                 sample_result = {
                     "sample_id": sample_id,
                     "status": "failed",
-                    "reason": str(exc),
+                    "reason": f"{type(exc).__name__}: {exc}",
                 }
 
+            # 统一整理样本级结果；仅成功且分数有效的样本参与数据集均值计算。
             status = sample_result.get("status")
             score = sample_result.get("semantic_consistency_score")
-            if status == "success" and isinstance(score, (int, float)):
+            if status == "success" and is_finite_number(score):
+                valid_score = float(score)
                 evaluated_samples.append(
                     {
                         "sample_id": sample_id,
-                        "semantic_consistency_score": float(score),
+                        "semantic_consistency_score": valid_score,
                     }
                 )
-                valid_scores.append(float(score))
-            elif status == "skipped":
-                skipped_samples.append(
-                    {
-                        "sample_id": sample_id,
-                        "reason": sample_result.get("reason", "unknown"),
-                    }
-                )
+                valid_scores.append(valid_score)
             elif status == "failed":
-                failed_samples.append(
-                    {
-                        "sample_id": sample_id,
-                        "reason": sample_result.get("reason", "unknown"),
-                    }
-                )
+                failed_samples.append(simplify_sample_result(sample_result))
+            else:
+                skipped_samples.append(simplify_sample_result(sample_result))
 
+        # 汇总数据集级语义一致性结果；若没有有效样本，则根据失败情况标记为 failed 或 skipped。
         mean_score = mean_or_none(valid_scores)
         if mean_score is not None:
             status = "success"
             reason = None
         else:
             status = "failed" if failed_samples else "skipped"
-            reason = (
-                "No prepared semantic data was evaluable for the fixed expected views."
-            )
+            reason = "No evaluable semantic data was found."
 
         result: dict[str, Any] = {
             "metric": self.name,
@@ -137,46 +120,39 @@ class SemanticConsistencyMetric:
             result["reason"] = reason
         return result
 
-    def _evaluate_sample(
-        self,
-        sample: GenerationSample,
-        runtime: dict[str, Any],
-    ) -> dict[str, Any]:
+    def _evaluate_sample(self, sample: GenerationSample) -> dict[str, Any]:
+        # 样本级评价优先按固定多视角读取语义参考；每个可用视角独立计算 TSCS 后取平均。
         metadata = sample.metadata or {}
         view_scores: list[float] = []
 
         for view in EXPECTED_CAMERA_VIEWS:
             try:
-                masks, num_classes = self._load_view_masks(metadata, runtime, view)
+                masks, num_classes = self._load_view_masks(metadata, view)
             except _SkipSample:
                 continue
 
             scores = self._tscs_score(
                 masks=masks,
                 num_classes=num_classes,
-                runtime=runtime,
                 weights=self.weights,
                 erosion_k=self.erosion_k,
                 min_iou=self.min_iou,
             )
             view_scores.append(float(scores["TSCS"]))
 
+        # 若不存在多视角字典格式语义数据，则回退到旧版单序列输入格式以保持兼容。
         if not view_scores:
             try:
-                masks, num_classes = self._load_legacy_sample_masks(sample, runtime)
+                masks, num_classes = self._load_legacy_sample_masks(sample)
             except _SkipSample:
-                return {
-                    "sample_id": sample.sample_id,
-                    "status": "skipped",
-                    "reason": (
-                        "No evaluable prepared semantic data found for expected views."
-                    ),
-                }
+                return skipped_result(
+                    sample.sample_id,
+                    "No evaluable prepared semantic data found.",
+                )
 
             scores = self._tscs_score(
                 masks=masks,
                 num_classes=num_classes,
-                runtime=runtime,
                 weights=self.weights,
                 erosion_k=self.erosion_k,
                 min_iou=self.min_iou,
@@ -189,42 +165,18 @@ class SemanticConsistencyMetric:
             "semantic_consistency_score": mean_or_none(view_scores),
         }
 
-    def _get_runtime(self) -> tuple[dict[str, Any] | None, str | None]:
-        try:
-            global np
-            import numpy as np  # type: ignore
-            import imageio.v2 as imageio  # type: ignore
-            from PIL import Image
-            from scipy.optimize import linear_sum_assignment
-            from scipy.spatial import cKDTree
-            from scipy.spatial.distance import jensenshannon
-            from skimage.measure import label, regionprops
-            from skimage.morphology import erosion, square
-        except Exception as exc:
-            return None, f"Required scoring dependencies are unavailable: {exc}"
-
-        return {
-            "imageio": imageio,
-            "Image": Image,
-            "linear_sum_assignment": linear_sum_assignment,
-            "cKDTree": cKDTree,
-            "jensenshannon": jensenshannon,
-            "label": label,
-            "regionprops": regionprops,
-            "erosion": erosion,
-            "square": square,
-        }, None
-
     def _load_view_masks(
         self,
         metadata: dict[str, Any],
-        runtime: dict[str, Any],
         view: str,
     ) -> tuple[np.ndarray, int]:
+        # 多视角语义数据按优先级读取：离散类别 mask 优先，其次为分割帧序列，最后为分割视频。
         if self.semantic_masks_key in metadata and isinstance(
             metadata[self.semantic_masks_key], dict
         ):
-            masks = self._load_semantic_masks(metadata[self.semantic_masks_key].get(view))
+            masks = self._load_semantic_masks(
+                metadata[self.semantic_masks_key].get(view)
+            )
             num_classes = self._resolve_num_classes(metadata, masks, view)
             return masks, num_classes
 
@@ -233,12 +185,10 @@ class SemanticConsistencyMetric:
         ):
             video_rgb = self._load_segmentation_frames(
                 metadata[self.segmentation_frames_key].get(view),
-                runtime,
             )
             palette = self._load_palette(self._resolve_palette(metadata, view))
             masks, num_classes, _ = self._labels_from_video_colormap(
                 video_rgb,
-                runtime,
                 palette=palette,
             )
             return masks, num_classes
@@ -248,12 +198,10 @@ class SemanticConsistencyMetric:
         ):
             video_rgb = self._load_segmentation_video(
                 metadata[self.segmentation_video_key].get(view),
-                runtime,
             )
             palette = self._load_palette(self._resolve_palette(metadata, view))
             masks, num_classes, _ = self._labels_from_video_colormap(
                 video_rgb,
-                runtime,
                 palette=palette,
             )
             return masks, num_classes
@@ -263,8 +211,8 @@ class SemanticConsistencyMetric:
     def _load_legacy_sample_masks(
         self,
         sample: GenerationSample,
-        runtime: dict[str, Any],
     ) -> tuple[np.ndarray, int]:
+        # 兼容旧版单序列语义输入；该路径不区分相机视角，仅对一个语义序列计算 TSCS。
         metadata = sample.metadata or {}
 
         if self.semantic_masks_key in metadata and not isinstance(
@@ -278,12 +226,11 @@ class SemanticConsistencyMetric:
             metadata[self.segmentation_frames_key], dict
         ):
             video_rgb = self._load_segmentation_frames(
-                metadata[self.segmentation_frames_key], runtime
+                metadata[self.segmentation_frames_key]
             )
             palette = self._load_palette(self._resolve_palette(metadata, None))
             masks, num_classes, _ = self._labels_from_video_colormap(
                 video_rgb,
-                runtime,
                 palette=palette,
             )
             return masks, num_classes
@@ -292,12 +239,11 @@ class SemanticConsistencyMetric:
             metadata[self.segmentation_video_key], dict
         ):
             video_rgb = self._load_segmentation_video(
-                metadata[self.segmentation_video_key], runtime
+                metadata[self.segmentation_video_key]
             )
             palette = self._load_palette(self._resolve_palette(metadata, None))
             masks, num_classes, _ = self._labels_from_video_colormap(
                 video_rgb,
-                runtime,
                 palette=palette,
             )
             return masks, num_classes
@@ -305,6 +251,7 @@ class SemanticConsistencyMetric:
         raise _SkipSample("Missing legacy single-sequence semantic data.")
 
     def _resolve_palette(self, metadata: dict[str, Any], view: str | None) -> Any:
+        # 解析颜色表配置；多视角场景允许每个视角使用独立 palette。
         raw_palette = metadata.get(self.palette_key)
         if isinstance(raw_palette, dict) and view is not None:
             return raw_palette.get(view)
@@ -316,16 +263,20 @@ class SemanticConsistencyMetric:
         masks: np.ndarray,
         view: str | None,
     ) -> int:
+        # 优先使用 manifest 中显式提供的类别数；缺失时从非忽略标签中自动推断。
         raw_num_classes = metadata.get(self.num_classes_key)
         if isinstance(raw_num_classes, dict) and view is not None:
             value = raw_num_classes.get(view)
             if value is not None:
                 return int(value)
-        elif raw_num_classes is not None:
+        if raw_num_classes is not None and not isinstance(raw_num_classes, dict):
             return int(raw_num_classes)
-        return int(np.max(masks)) + 1 if masks.size else 0
+
+        valid_masks = masks[masks != self.ignore_label]
+        return int(np.max(valid_masks)) + 1 if valid_masks.size else 0
 
     def _load_semantic_masks(self, raw_value: Any) -> np.ndarray:
+        # 读取已离散化的语义 mask；支持内存数组、列表、.npy 文件和 .json 文件。
         if raw_value is None:
             raise _SkipSample("semantic_masks entry is missing.")
         if isinstance(raw_value, np.ndarray):
@@ -354,16 +305,10 @@ class SemanticConsistencyMetric:
             raise _SkipSample("semantic_masks must have shape [T, H, W].")
         return masks.astype(np.int32, copy=False)
 
-    def _load_segmentation_frames(
-        self,
-        raw_value: Any,
-        runtime: dict[str, Any],
-    ) -> np.ndarray:
+    def _load_segmentation_frames(self, raw_value: Any) -> np.ndarray:
+        # 读取彩色分割帧序列；支持数组、帧路径列表、序列文件和常见视频格式。
         if raw_value is None:
             raise _SkipSample("segmentation_frames entry is missing.")
-
-        imageio = runtime["imageio"]
-        image_class = runtime["Image"]
 
         if isinstance(raw_value, np.ndarray):
             frames = raw_value
@@ -378,7 +323,7 @@ class SemanticConsistencyMetric:
                         raise _SkipSample(
                             f"segmentation frame path does not exist: {item}"
                         )
-                    with image_class.open(path) as image:
+                    with Image.open(path) as image:
                         frame_arrays.append(
                             np.asarray(image.convert("RGB"), dtype=np.uint8)
                         )
@@ -388,12 +333,21 @@ class SemanticConsistencyMetric:
         elif isinstance(raw_value, str):
             path = Path(raw_value)
             if not path.exists():
-                raise _SkipSample(f"segmentation_frames path does not exist: {raw_value}")
+                raise _SkipSample(
+                    f"segmentation_frames path does not exist: {raw_value}"
+                )
             if path.suffix.lower() == ".npy":
                 frames = np.load(path, allow_pickle=False)
             elif path.suffix.lower() == ".json":
                 frames = np.asarray(json.loads(path.read_text(encoding="utf-8")))
-            elif path.suffix.lower() in {".gif", ".mp4", ".avi", ".mov", ".mkv", ".webm"}:
+            elif path.suffix.lower() in {
+                ".gif",
+                ".mp4",
+                ".avi",
+                ".mov",
+                ".mkv",
+                ".webm",
+            }:
                 frames = np.asarray(imageio.mimread(path), dtype=np.uint8)
             else:
                 raise _SkipSample(
@@ -406,11 +360,8 @@ class SemanticConsistencyMetric:
 
         return self._ensure_video_rgb(np.asarray(frames))
 
-    def _load_segmentation_video(
-        self,
-        raw_value: Any,
-        runtime: dict[str, Any],
-    ) -> np.ndarray:
+    def _load_segmentation_video(self, raw_value: Any) -> np.ndarray:
+        # 读取单个彩色分割视频，并统一转换为 RGB 帧序列。
         if raw_value is None:
             raise _SkipSample("segmentation_video entry is missing.")
         if not isinstance(raw_value, str):
@@ -418,13 +369,14 @@ class SemanticConsistencyMetric:
         path = Path(raw_value)
         if not path.exists():
             raise _SkipSample(f"segmentation_video path does not exist: {raw_value}")
-        frames = np.asarray(runtime["imageio"].mimread(path), dtype=np.uint8)
+        frames = np.asarray(imageio.mimread(path), dtype=np.uint8)
         return self._ensure_video_rgb(frames)
 
     def _load_palette(
         self,
         raw_palette: Any,
     ) -> np.ndarray | dict[tuple[int, int, int], int] | None:
+        # 读取颜色到类别的映射关系；未提供时后续会从分割视频中自动构建颜色表。
         if raw_palette is None:
             return None
         if isinstance(raw_palette, dict):
@@ -444,6 +396,7 @@ class SemanticConsistencyMetric:
         return palette.astype(np.uint8, copy=False)
 
     def _ensure_video_rgb(self, frames: np.ndarray) -> np.ndarray:
+        # 统一彩色分割输入的维度和数据类型，保证后续颜色映射使用 [T,H,W,3] 的 uint8 RGB 数据。
         frames = np.asarray(frames)
         if frames.ndim != 4:
             raise _SkipSample("Prepared segmentation RGB data must have 4 dimensions.")
@@ -462,61 +415,35 @@ class SemanticConsistencyMetric:
     def _labels_from_video_colormap(
         self,
         video_rgb: np.ndarray,
-        runtime: dict[str, Any],
         palette: np.ndarray | dict[tuple[int, int, int], int] | None = None,
     ) -> tuple[np.ndarray, int, np.ndarray]:
-        ckd_tree = runtime["cKDTree"]
+        # 将彩色分割结果映射为类别 ID mask；ignore_color 会被转换为 ignore_label 并排除出评分。
         video_rgb = self._ensure_video_rgb(video_rgb)
         pixels = video_rgb.reshape(-1, 3).astype(np.int16)
 
         if isinstance(palette, dict):
-            items = sorted(palette.items(), key=lambda item: item[1])
-            size = max(palette.values()) + 1
-            palette_array = np.zeros((size, 3), dtype=np.uint8)
-            for rgb, class_id in items:
-                palette_array[class_id] = np.asarray(rgb, dtype=np.uint8)
-            labels = self._map_pixels_to_palette(
-                pixels,
-                palette_array,
-                ckd_tree,
-                approximate=self.approximate_palette,
-            )
-            num_classes = palette_array.shape[0]
+            palette_array = self._palette_dict_to_array(palette)
         elif isinstance(palette, np.ndarray):
             palette_array = palette.astype(np.uint8, copy=False)
-            labels = self._map_pixels_to_palette(
-                pixels,
-                palette_array,
-                ckd_tree,
-                approximate=self.approximate_palette,
-            )
-            num_classes = palette_array.shape[0]
         else:
             palette_array = self._build_palette_from_video(
                 video_rgb,
                 max_colors=self.max_colors_auto,
             )
-            labels = self._map_pixels_to_palette(
-                pixels,
-                palette_array,
-                ckd_tree,
-                approximate=self.approximate_palette,
-            )
-            num_classes = palette_array.shape[0]
+
+        labels = self._map_pixels_to_palette(
+            pixels,
+            palette_array,
+            approximate=self.approximate_palette,
+        )
+        num_classes = palette_array.shape[0]
 
         if self.ignore_color is not None:
             ignore_mask = np.all(
                 pixels == np.asarray(self.ignore_color, dtype=np.int16),
                 axis=1,
             )
-            match_idx = np.where(
-                np.all(
-                    palette_array == np.asarray(self.ignore_color, dtype=np.uint8),
-                    axis=1,
-                )
-            )[0]
-            if match_idx.size > 0:
-                labels[ignore_mask] = int(match_idx[0])
+            labels[ignore_mask] = self.ignore_label
 
         masks = labels.reshape(
             video_rgb.shape[0],
@@ -525,11 +452,23 @@ class SemanticConsistencyMetric:
         ).astype(np.int32)
         return masks, num_classes, palette_array
 
+    def _palette_dict_to_array(
+        self,
+        palette: dict[tuple[int, int, int], int],
+    ) -> np.ndarray:
+        # 将字典形式 palette 转换为数组形式，数组下标即类别 ID。
+        size = max(palette.values()) + 1 if palette else 0
+        palette_array = np.zeros((size, 3), dtype=np.uint8)
+        for rgb, class_id in sorted(palette.items(), key=lambda item: item[1]):
+            palette_array[class_id] = np.asarray(rgb, dtype=np.uint8)
+        return palette_array
+
     def _build_palette_from_video(
         self,
         video_rgb: np.ndarray,
         max_colors: int | None = None,
     ) -> np.ndarray:
+        # 当未提供 palette 时，从彩色分割结果中提取唯一颜色；颜色过多时认为输入不是干净分割图。
         flat = video_rgb.reshape(-1, 3)
         unique_colors = np.unique(flat, axis=0)
         if max_colors is not None and unique_colors.shape[0] > max_colors:
@@ -543,29 +482,30 @@ class SemanticConsistencyMetric:
         self,
         pixels: np.ndarray,
         palette: np.ndarray,
-        ckd_tree: Any,
         *,
         approximate: bool,
     ) -> np.ndarray:
+        # 将像素颜色映射为类别 ID；近似模式用于缓解视频压缩导致的颜色偏移。
         if approximate:
-            tree = ckd_tree(palette.astype(np.float32))
+            tree = cKDTree(palette.astype(np.float32))
             _, nearest = tree.query(pixels.astype(np.float32), k=1)
             return nearest.astype(np.int32)
 
-        lut = {tuple(map(int, palette[i])): i for i in range(palette.shape[0])}
-        return np.asarray([lut.get(tuple(pixel), 0) for pixel in pixels], dtype=np.int32)
+        lookup = {tuple(map(int, palette[i])): i for i in range(palette.shape[0])}
+        return np.asarray(
+            [lookup.get(tuple(pixel), 0) for pixel in pixels], dtype=np.int32
+        )
 
     def _compute_lfr_interior(
         self,
         masks: np.ndarray,
         num_classes: int,
-        runtime: dict[str, Any],
         erosion_k: int,
     ) -> float:
+        # 计算类别内部区域的标签翻转稳定性；腐蚀操作用于削弱语义边界抖动的影响。
         if masks.shape[0] < 2:
             return 1.0
-        square = runtime["square"]
-        erosion = runtime["erosion"]
+
         structure = square(max(1, erosion_k))
         interior = np.zeros(masks.shape, dtype=bool)
         for t in range(masks.shape[0]):
@@ -576,9 +516,13 @@ class SemanticConsistencyMetric:
                     interior_t |= erosion(class_mask, structure)
             interior[t] = interior_t
 
+        # 仅在相邻两帧都不是 ignore_label 的共同内部区域上统计标签翻转率。
         flips = []
         for t in range(masks.shape[0] - 1):
-            common_interior = interior[t] & interior[t + 1]
+            valid_pair = (masks[t] != self.ignore_label) & (
+                masks[t + 1] != self.ignore_label
+            )
+            common_interior = interior[t] & interior[t + 1] & valid_pair
             if not common_interior.any():
                 continue
             flips.append(
@@ -586,19 +530,19 @@ class SemanticConsistencyMetric:
             )
         if not flips:
             return 1.0
-        return 1.0 - float(np.mean(flips))
+        return clamp01(1.0 - float(np.mean(flips)))
 
     def _class_components(
         self,
         mask: np.ndarray,
         class_id: int,
-        runtime: dict[str, Any],
     ) -> tuple[np.ndarray | None, list[Any]]:
+        # 提取单个类别的连通区域，为相邻帧语义区域匹配提供组件级输入。
         cls = (mask == class_id).astype(np.uint8)
         if cls.sum() == 0:
             return None, []
-        labeled = runtime["label"](cls, connectivity=1)
-        props = runtime["regionprops"](labeled)
+        labeled = label(cls, connectivity=1)
+        props = regionprops(labeled)
         return labeled, props
 
     def _overlap_counts(
@@ -608,6 +552,7 @@ class SemanticConsistencyMetric:
         labeled_b: np.ndarray,
         props_b: list[Any],
     ) -> np.ndarray:
+        # 计算两帧同类连通组件之间的像素重叠数量，用于后续 IoU 匹配。
         if not props_a or not props_b:
             return np.zeros((len(props_a), len(props_b)), dtype=np.int64)
         max_b = max(prop.label for prop in props_b)
@@ -626,20 +571,19 @@ class SemanticConsistencyMetric:
         self,
         masks: np.ndarray,
         num_classes: int,
-        runtime: dict[str, Any],
         min_iou: float,
     ) -> float:
+        # 计算语义区域连通稳定性；同类别连通组件在相邻帧中通过 IoU 和匈牙利匹配建立对应关系。
         if masks.shape[0] < 2:
             return 1.0
-        linear_sum_assignment = runtime["linear_sum_assignment"]
         iou_scores: list[tuple[float, float]] = []
 
         for t in range(masks.shape[0] - 1):
             mask_a = masks[t]
             mask_b = masks[t + 1]
             for class_id in range(num_classes):
-                labeled_a, props_a = self._class_components(mask_a, class_id, runtime)
-                labeled_b, props_b = self._class_components(mask_b, class_id, runtime)
+                labeled_a, props_a = self._class_components(mask_a, class_id)
+                labeled_b, props_b = self._class_components(mask_b, class_id)
                 if labeled_a is None or labeled_b is None:
                     if labeled_a is not None and labeled_b is None:
                         for prop in props_a:
@@ -667,63 +611,78 @@ class SemanticConsistencyMetric:
             return 1.0
         ious, weights = zip(*iou_scores)
         weights_array = np.asarray(weights, dtype=np.float64)
-        return float(
-            (np.asarray(ious, dtype=np.float64) * weights_array).sum()
-            / (weights_array.sum() + 1e-8)
+        score = (np.asarray(ious, dtype=np.float64) * weights_array).sum() / (
+            weights_array.sum() + 1e-8
         )
+        return clamp01(float(score))
 
-    def _compute_cds(
-        self,
-        masks: np.ndarray,
-        num_classes: int,
-        runtime: dict[str, Any],
-    ) -> float:
+    def _compute_cds(self, masks: np.ndarray, num_classes: int) -> float:
+        # 计算类别分布稳定性；相邻帧类别直方图的 Jensen-Shannon 距离越小，分数越高。
         if masks.shape[0] < 2:
             return 1.0
-        jensenshannon = runtime["jensenshannon"]
-        histograms = []
+
+        histograms: list[np.ndarray | None] = []
+        bins = np.arange(num_classes + 1)
         for t in range(masks.shape[0]):
-            hist, _ = np.histogram(masks[t], bins=np.arange(num_classes + 1))
+            valid_pixels = masks[t][masks[t] != self.ignore_label]
+            valid_pixels = valid_pixels[
+                (valid_pixels >= 0) & (valid_pixels < num_classes)
+            ]
+            if valid_pixels.size == 0:
+                histograms.append(None)
+                continue
+            hist, _ = np.histogram(valid_pixels, bins=bins)
             prob = hist.astype(np.float64)
             prob = (prob + 1e-8) / (prob.sum() + 1e-8 * num_classes)
             histograms.append(prob)
 
         jsd_scores = []
         for t in range(masks.shape[0] - 1):
-            jsd_scores.append(jensenshannon(histograms[t], histograms[t + 1]) ** 2)
-        return float(1.0 - np.mean(jsd_scores))
+            hist_a = histograms[t]
+            hist_b = histograms[t + 1]
+            if hist_a is None or hist_b is None:
+                continue
+            jsd_scores.append(jensenshannon(hist_a, hist_b) ** 2)
+        if not jsd_scores:
+            return 1.0
+        return clamp01(1.0 - float(np.mean(jsd_scores)))
 
     def _tscs_score(
         self,
         *,
         masks: np.ndarray,
         num_classes: int,
-        runtime: dict[str, Any],
         weights: tuple[float, float, float],
         erosion_k: int,
         min_iou: float,
     ) -> dict[str, Any]:
+        # 综合三个子指标得到 TSCS；输入 mask 必须是 [T,H,W] 的类别 ID 序列。
         masks = np.asarray(masks)
         if masks.ndim != 3:
             raise ValueError("Semantic masks must have shape [T, H, W].")
+        if num_classes <= 0:
+            raise ValueError(
+                "num_classes must be positive after ignoring invalid pixels."
+            )
+
         weight_lfr, weight_sac, weight_cds = weights
         s_lfr = self._compute_lfr_interior(
             masks,
             num_classes,
-            runtime,
             erosion_k=erosion_k,
         )
-        s_sac = self._compute_sac(masks, num_classes, runtime, min_iou=min_iou)
-        s_cds = self._compute_cds(masks, num_classes, runtime)
+        s_sac = self._compute_sac(masks, num_classes, min_iou=min_iou)
+        s_cds = self._compute_cds(masks, num_classes)
         tscs = float(weight_lfr * s_lfr + weight_sac * s_sac + weight_cds * s_cds)
         return {
-            "TSCS": tscs,
+            "TSCS": clamp01(tscs),
             "S_LFR": s_lfr,
             "S_SAC": s_sac,
             "S_CDS": s_cds,
         }
 
     def _normalize_color(self, raw_color: Any) -> tuple[int, int, int] | None:
+        # 规范化 ignore_color 配置，确保其为 RGB 三元组或 None。
         if raw_color is None:
             return None
         if len(raw_color) != 3:
@@ -735,10 +694,33 @@ class _SkipSample(Exception):
     pass
 
 
-SemanticConsistency = SemanticConsistencyMetric
+def skipped_result(sample_id: str, reason: str) -> dict[str, Any]:
+    # 构造样本级跳过结果，供 evaluate 统一汇总。
+    return {"sample_id": sample_id, "status": "skipped", "reason": reason}
+
+
+def simplify_sample_result(result: dict[str, Any]) -> dict[str, Any]:
+    # 压缩样本级失败或跳过结果，只保留样本标识和原因。
+    return {
+        "sample_id": result.get("sample_id", "unknown"),
+        "reason": result.get("reason", "unknown"),
+    }
 
 
 def mean_or_none(values: list[float]) -> float | None:
+    # 计算有效分数均值；空列表返回 None 以便上层判断状态。
     if not values:
         return None
     return float(sum(values) / len(values))
+
+
+def is_finite_number(value: Any) -> bool:
+    # 判断值是否为有限数值，避免 NaN 或 inf 进入最终均值。
+    return isinstance(value, (int, float)) and np.isfinite(float(value))
+
+
+def clamp01(value: float) -> float:
+    # 将指标分数裁剪到 [0,1] 区间，保证输出尺度稳定。
+    if not np.isfinite(float(value)):
+        return 0.0
+    return max(0.0, min(1.0, float(value)))

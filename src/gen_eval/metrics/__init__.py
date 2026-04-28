@@ -1,11 +1,8 @@
-"""Built-in metric registration for GEN_EVAL."""
-
 from __future__ import annotations
 
 from typing import Any
 
 from gen_eval.registry import registry
-
 
 class PlaceholderMetric:
     name = "placeholder_metric"
@@ -35,13 +32,6 @@ class PlaceholderMetric:
             "reason": "Placeholder metric. Implementation requires model/runtime integration.",
         }
 
-
-# 1. 调用 register_builtin_metrics()
-# 2. metrics/__init__.py 中导入所有内置指标类，并在 register_builtin_metrics 中注册它们到 registry
-# 3. registry.register(metric_class)
-# 4. registry._metrics 中保存 name → class
-# 5. evaluator.py 调用 registry.get(metric_name)
-# 6. 拿到 metric class
 def register_builtin_metrics() -> None:
     from .appearance_consistency import AppearanceConsistencyMetric
     from .depth_consistency import DepthConsistencyMetric
@@ -63,7 +53,6 @@ def register_builtin_metrics() -> None:
 
     for metric_class in metric_classes:
         registry.register(metric_class)
-
 
 __all__ = [
     "PlaceholderMetric",

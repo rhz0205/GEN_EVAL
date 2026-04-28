@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Build prepared instance tracks for a GEN_EVAL manifest."""
-
 from __future__ import annotations
 
 import argparse
@@ -21,7 +19,6 @@ from gen_eval.instance_extraction import (
     UnavailableEmbeddingBackend,
 )
 
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Write a new manifest copy with metadata['instance_tracks']."
@@ -29,7 +26,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", required=True, help="Input manifest JSON path.")
     parser.add_argument("--output", required=True, help="Output manifest JSON path.")
     return parser
-
 
 def main() -> int:
     parser = build_parser()
@@ -84,7 +80,6 @@ def main() -> int:
     print(f"skipped: {skipped}")
     return 0
 
-
 def _extract_samples(payload: Any) -> list[Any]:
     if isinstance(payload, list):
         return payload
@@ -93,7 +88,6 @@ def _extract_samples(payload: Any) -> list[Any]:
         if isinstance(samples, list):
             return samples
     raise ValueError("Manifest JSON must be a list or an object with a 'samples' list.")
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

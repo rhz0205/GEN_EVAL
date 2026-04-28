@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Summarize a saved GEN_EVAL result JSON."""
-
 from __future__ import annotations
 
 import argparse
@@ -14,7 +12,6 @@ if str(SRC_ROOT) not in sys.path:
 
 from gen_eval.result_summary import summarize_result_file
 
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="Summarize a GEN_EVAL result JSON.")
     parser.add_argument("--result", required=True, help="Path to saved result JSON.")
@@ -23,7 +20,6 @@ def main() -> int:
     for line in summarize_result_file(args.result):
         print(line)
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

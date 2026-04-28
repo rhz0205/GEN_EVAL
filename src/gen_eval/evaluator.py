@@ -40,9 +40,7 @@ QUALITY_METRIC_MEAN_SOURCE_FIELDS: dict[str, str] = {
     "instance_consistency": "mean_instance_consistency_score",
 }
 
-
 class Evaluator:
-    """Orchestrate manifest loading and metric execution."""
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
@@ -50,14 +48,10 @@ class Evaluator:
 
     @classmethod
     def from_config_path(cls, path: str | Path) -> "Evaluator":
-        """当前主流程中未使用此方法，保留作为备用的 Evaluator 实例化方式"""
         config_path = Path(path)
         return cls(_load_config(config_path))
 
     def run(self) -> dict[str, Any]:
-        """Run all enabled metrics against the configured manifest.
-        Local 模式的核心逻辑：读取 manifest_path，加载样本数据，遍历启用的指标并执行评估，构建结果负载并可选地保存输出。
-        """
         manifest_path = self.config["manifest_path"]
         samples = load_manifest(manifest_path)
 
@@ -110,21 +104,14 @@ class Evaluator:
             write_results(output_path, payload)
         return payload
 
-
 def _load_config(path: Path) -> dict[str, Any]:
-    """配置文件支持 JSON 或 YAML 格式"""
     text = path.read_text(encoding="utf-8")
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         return load_yaml(path)
 
-
 def iter_enabled_metrics(metrics_config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    """Return enabled metric names and normalized metric configs.
-    根据 run config 中的 "metrics" 字段，筛选出启用的指标并返回其名称和配置。
-    每个指标配置应包含一个 "enabled" 字段来指示是否启用。
-    """
     enabled = []
     for metric_name, raw_config in metrics_config.items():
         metric_config = raw_config or {}
@@ -136,7 +123,6 @@ def iter_enabled_metrics(metrics_config: dict[str, Any]) -> list[tuple[str, dict
     other_items = [item for item in enabled if item[0] != VIDEO_INTEGRITY_METRIC]
     return video_integrity_items + other_items
 
-
 def run_metric(
     metric_name: str,
     metric_config: dict[str, Any],
@@ -147,18 +133,7 @@ def run_metric(
     result = metric.evaluate(samples)
     return normalize_metric_result(metric_name, result)
 
-
 def normalize_metric_result(metric_name: str, result: Any) -> dict[str, Any]:
-    """Normalize metric outputs to the shared evaluator result contract.
-    标准结构：
-    {
-    "metric": str,  # 指标名称
-    "score": float | None,  # 指标得分，数值类型或 None
-    "num_samples": int,  # 评估样本数量
-    "details": dict[str, Any],  # 其他指标相关的详细信息，应为字典类型
-    "status": str,  # 评估状态，默认为 "failed"，成功时应为 "success"
-    }
-    """
     if not isinstance(result, dict):
         raise TypeError(f"Metric '{metric_name}' must return a dict, got {type(result).__name__}.")
 
@@ -176,26 +151,20 @@ def normalize_metric_result(metric_name: str, result: Any) -> dict[str, Any]:
     normalized["status"] = normalized_status
     return normalized
 
-
 def is_quality_metric(metric_name: str) -> bool:
     return metric_name in QUALITY_METRIC_SCORE_FIELDS
-
 
 def get_quality_metric_score_field(metric_name: str) -> str | None:
     return QUALITY_METRIC_SCORE_FIELDS.get(metric_name)
 
-
 def get_quality_metric_mean_field(metric_name: str) -> str | None:
     return QUALITY_METRIC_MEAN_FIELDS.get(metric_name)
-
 
 def get_quality_metric_mean_source_field(metric_name: str) -> str | None:
     return QUALITY_METRIC_MEAN_SOURCE_FIELDS.get(metric_name)
 
-
 def get_sample_id(sample: Any) -> str:
     return str(getattr(sample, "sample_id", None) or "unknown")
-
 
 def build_video_integrity_gate(
     samples: list[Any],
@@ -227,7 +196,6 @@ def build_video_integrity_gate(
         "valid_samples": valid_samples,
     }
 
-
 def build_gated_metric_placeholder(metric_name: str, sample_id: str) -> dict[str, Any]:
     score_field = get_quality_metric_score_field(metric_name)
     if score_field is None:
@@ -238,7 +206,6 @@ def build_gated_metric_placeholder(metric_name: str, sample_id: str) -> dict[str
         "gated_by_video_integrity": True,
         "reason": VIDEO_INTEGRITY_GATE_REASON,
     }
-
 
 def build_gated_metric_result(
     metric_name: str,
@@ -268,7 +235,6 @@ def build_gated_metric_result(
         },
         "reason": "No samples passed video_integrity.",
     }
-
 
 def apply_video_integrity_gate(
     metric_name: str,
@@ -315,7 +281,6 @@ def apply_video_integrity_gate(
     normalized["valid_sample_count"] = valid_sample_count
     normalized["invalid_sample_count"] = len(invalid_sample_ids)
     return normalized
-
 
 def _get_quality_metric_valid_count(metric_name: str, metric_result: dict[str, Any]) -> int:
     valid_sample_count = metric_result.get("valid_sample_count")

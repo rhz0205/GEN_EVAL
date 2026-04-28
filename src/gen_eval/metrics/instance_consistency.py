@@ -1,5 +1,3 @@
-"""Instance-level consistency metric for fixed multi-view prepared tracks."""
-
 from __future__ import annotations
 
 import math
@@ -17,9 +15,7 @@ EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
     "camera_rear",
 )
 
-
 class InstanceConsistencyMetric:
-    """Measure track-level stability from prepared object metadata and embeddings."""
 
     name = "instance_consistency"
 
@@ -596,19 +592,15 @@ class InstanceConsistencyMetric:
             return f"Required scoring dependency is unavailable: {exc}"
         return None
 
-
 InstanceConsistency = InstanceConsistencyMetric
-
 
 class _SkipSample(Exception):
     pass
-
 
 def mean_or_none(values: list[float]) -> float | None:
     if not values:
         return None
     return float(sum(values) / len(values))
-
 
 def is_finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(float(value))

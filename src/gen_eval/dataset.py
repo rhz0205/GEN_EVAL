@@ -7,24 +7,18 @@ from typing import Any
 
 from gen_eval.schemas import GenerationSample
 
-
 def load_manifest(path: str | Path) -> list[GenerationSample]:
-    """把不同格式的 manifest 数据加载并转换成统一的 GenerationSample 列表"""
     payload = load_manifest_payload(path)
     samples_data = _extract_samples(payload)
     return [GenerationSample.from_dict(item) for item in samples_data]
 
-
 def load_manifest_payload(path: str | Path) -> Any:
-    """读取 manifest 文件内容，支持 JSON 格式，返回原始数据结构（列表或字典）"""
     manifest_path = Path(path)
     return json.loads(manifest_path.read_text(encoding="utf-8"))
-
 
 def load_manifest_records(path: str | Path) -> list[dict[str, Any]]:
     payload = load_manifest_payload(path)
     return [item for item in _extract_samples(payload) if isinstance(item, dict)]
-
 
 def _extract_samples(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
@@ -33,7 +27,6 @@ def _extract_samples(payload: Any) -> list[dict[str, Any]]:
         if "samples" in payload and isinstance(payload["samples"], list):
             return payload["samples"]
     raise ValueError("Manifest JSON must be a list or an object with a 'samples' list.")
-
 
 def _path_kind(value: Any) -> str:
     if value is None or value == "":
@@ -45,13 +38,11 @@ def _path_kind(value: Any) -> str:
         return "dir"
     return "missing"
 
-
 def _truncate_json(value: Any, limit: int = 800) -> str:
     text = json.dumps(value, ensure_ascii=False, indent=2)
     if len(text) <= limit:
         return text
     return text[: limit - 15] + "\n...<truncated>"
-
 
 def format_manifest_summary(manifest_path: str | Path) -> list[str]:
     path = Path(manifest_path)
@@ -65,7 +56,6 @@ def format_manifest_summary(manifest_path: str | Path) -> list[str]:
     first_sample = samples[0] if samples else None
     lines.append(f"first_sample_id: {first_sample.get('sample_id') if first_sample else None}")
 
-    # 初始化统计器
     generated_video_counts: Counter[str] = Counter()
     reference_video_counts: Counter[str] = Counter()
     camera_videos_presence = 0

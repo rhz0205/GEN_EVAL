@@ -1,11 +1,15 @@
-"""DINO-based appearance consistency metric for fixed multi-view videos."""
-
 from __future__ import annotations
 
 import math
 import sys
 from pathlib import Path
 from typing import Any
+
+import cv2
+import torch
+from PIL import Image
+from torchvision import transforms
+from torchvision.transforms import functional as TF
 
 EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
     "camera_front",
@@ -17,51 +21,34 @@ EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
 )
 
 
-class AppearanceConsistencyMetric:
-    """Measure DINO-based appearance stability across fixed driving-camera views."""
-
+class AppearanceConsistency:
     name = "appearance_consistency"
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
+        # 读取指标运行配置，并统一约束输入字段、模型路径和推理参数。
         self.config = config or {}
         self.camera_videos_key = self.config.get("camera_videos_key", "camera_videos")
+        self.expected_camera_views = tuple(
+            self.config.get("expected_camera_views", EXPECTED_CAMERA_VIEWS)
+        )
         self.device = self.config.get("device", "cuda")
-        self.repo_path = (
-            self.config.get("repo_path")
-            or self.config.get("repo_or_dir")
-            or self.config.get("dino_repo_path")
-            or self.config.get("local_repo_path")
-        )
-        self.weight_path = (
-            self.config.get("weight_path")
-            or self.config.get("weights_path")
-            or self.config.get("dino_weight_path")
-            or self.config.get("local_save_path")
-        )
+
+        self.repo_path = self.config.get("repo_path")
+        self.weight_path = self.config.get("weight_path")
         self.model_name = self.config.get("model_name", "dino_vitb16")
         self.use_fp16 = bool(self.config.get("use_fp16", False))
         self.strict_load = bool(self.config.get("strict_load", True))
-        self.image_size = int(
-            self.config.get("image_size", self.config.get("resize", 224))
-        )
+        self.image_size = int(self.config.get("image_size", 224))
         self.batch_size = int(self.config.get("batch_size", 16))
+        self.eps = float(self.config.get("eps", 1e-8))
 
-        self._torch = None
-        self._cv2 = None
-        self._torchvision_transforms = None
-        self._torchvision_tf = None
-        self._pil_image = None
-        self._dino_model = None
-        self._transform = None
+        self._dino_model: Any | None = None
+        self._transform: Any | None = None
 
     def evaluate(self, samples: list[Any]) -> dict[str, Any]:
-        evaluated_samples: list[dict[str, Any]] = []
-        skipped_samples: list[dict[str, Any]] = []
-        failed_samples: list[dict[str, Any]] = []
-        valid_scores: list[float] = []
-
-        runtime_status = self._ensure_dino()
-        if runtime_status is not None:
+        # 先完成 DINO 模型初始化；若运行条件缺失，则以指标级 skipped 返回。
+        runtime_error = self._ensure_dino()
+        if runtime_error is not None:
             return {
                 "metric": self.name,
                 "status": "skipped",
@@ -70,24 +57,24 @@ class AppearanceConsistencyMetric:
                 "mean_appearance_consistency_score": None,
                 "details": {
                     "evaluated_samples": [],
-                    "skipped_samples": [
-                        {
-                            "sample_id": getattr(sample, "sample_id", "unknown"),
-                            "reason": runtime_status,
-                        }
-                        for sample in samples
-                    ],
+                    "skipped_samples": [],
                     "failed_samples": [],
                 },
-                "reason": runtime_status,
+                "reason": runtime_error,
             }
 
+        evaluated_samples: list[dict[str, Any]] = []
+        skipped_samples: list[dict[str, Any]] = []
+        failed_samples: list[dict[str, Any]] = []
+        valid_scores: list[float] = []
+
+        # 逐样本执行评价，并将成功、跳过和失败结果整理为统一输出结构。
         for sample in samples:
             sample_id = getattr(sample, "sample_id", None) or "unknown"
 
             try:
                 sample_result = self._evaluate_sample(sample)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 sample_result = {
                     "sample_id": sample_id,
                     "status": "failed",
@@ -98,35 +85,25 @@ class AppearanceConsistencyMetric:
             score = sample_result.get("appearance_consistency_score")
 
             if status == "success" and is_finite_number(score):
+                valid_score = float(score)
+                valid_scores.append(valid_score)
                 evaluated_samples.append(
                     {
                         "sample_id": sample_id,
-                        "appearance_consistency_score": float(score),
-                    }
-                )
-                valid_scores.append(float(score))
-            elif status == "skipped":
-                skipped_samples.append(
-                    {
-                        "sample_id": sample_id,
-                        "reason": sample_result.get("reason", "unknown"),
+                        "appearance_consistency_score": valid_score,
                     }
                 )
             elif status == "failed":
-                failed_samples.append(
-                    {
-                        "sample_id": sample_id,
-                        "reason": sample_result.get("reason", "unknown"),
-                    }
-                )
+                failed_samples.append(simplify_sample_result(sample_result))
+            else:
+                skipped_samples.append(simplify_sample_result(sample_result))
 
+        # 汇总所有有效样本分数；若没有有效分数，则保留跳过状态和原因。
         mean_score = mean_or_none(valid_scores)
-        if mean_score is not None:
-            status = "success"
-            reason = None
-        else:
-            status = "failed" if failed_samples else "skipped"
-            reason = "No sample produced a valid appearance_consistency_score."
+        status = "success" if mean_score is not None else "skipped"
+        reason = (
+            None if mean_score is not None else "No valid appearance consistency score."
+        )
 
         result: dict[str, Any] = {
             "metric": self.name,
@@ -145,42 +122,39 @@ class AppearanceConsistencyMetric:
         return result
 
     def _evaluate_sample(self, sample: Any) -> dict[str, Any]:
+        # 从样本 metadata 中解析多相机视频路径，并检查固定视角输入是否完整。
         sample_id = getattr(sample, "sample_id", None) or "unknown"
         metadata = getattr(sample, "metadata", None) or {}
         camera_videos = metadata.get(self.camera_videos_key)
-
         if not isinstance(camera_videos, dict) or not camera_videos:
-            return {
-                "sample_id": sample_id,
-                "status": "skipped",
-                "reason": "metadata['camera_videos'] is required and must be a non-empty dict.",
-            }
+            return skipped_result(
+                sample_id,
+                f"metadata['{self.camera_videos_key}'] must be a non-empty dict.",
+            )
 
-        normalized_videos = {
-            str(view): str(path) for view, path in camera_videos.items() if path is not None
+        generated_videos = {
+            str(view): str(path)
+            for view, path in camera_videos.items()
+            if path is not None
         }
         missing_views = [
-            view for view in EXPECTED_CAMERA_VIEWS if view not in normalized_videos
+            view for view in self.expected_camera_views if view not in generated_videos
         ]
         if missing_views:
-            return {
-                "sample_id": sample_id,
-                "status": "skipped",
-                "reason": f"Missing expected camera views: {', '.join(missing_views)}.",
-            }
+            return skipped_result(
+                sample_id,
+                f"Missing camera views: {', '.join(missing_views)}.",
+            )
 
+        # 分别计算各相机视频的外观时序一致性，再形成样本级平均分。
         view_scores: list[float] = []
-        for view in EXPECTED_CAMERA_VIEWS:
-            view_score = self._evaluate_view_video(normalized_videos[view])
+        for view in self.expected_camera_views:
+            view_score = self._evaluate_view_video(generated_videos[view])
             if is_finite_number(view_score):
                 view_scores.append(float(view_score))
 
         if not view_scores:
-            return {
-                "sample_id": sample_id,
-                "status": "skipped",
-                "reason": "No expected camera view produced a valid appearance consistency score.",
-            }
+            return skipped_result(sample_id, "No valid video score.")
 
         return {
             "sample_id": sample_id,
@@ -189,11 +163,12 @@ class AppearanceConsistencyMetric:
         }
 
     def _evaluate_view_video(self, video_path: str) -> float | None:
+        # 对单个视角视频执行读取、特征提取和无参考外观一致性计算。
         path = Path(video_path)
-        if not path.exists() or not path.is_file():
+        if not path.is_file():
             return None
 
-        frames = self._read_all_frames(video_path)
+        frames = self._read_all_frames(path)
         if len(frames) < 2:
             return None
 
@@ -203,74 +178,50 @@ class AppearanceConsistencyMetric:
 
         return self._compute_appearance_consistency_score(features)
 
-    def _compute_appearance_consistency_score(self, features: Any) -> float | None:
-        torch = self._torch
-        if torch is None:
-            raise RuntimeError("torch is not initialized")
-        if features is None or len(features) < 2:
+    def _compute_appearance_consistency_score(
+        self, generated_features: Any
+    ) -> float | None:
+        # 使用 ACM 表征相邻帧平滑度，使用 TJI 惩罚二阶时间抖动。
+        if generated_features is None or len(generated_features) < 2:
             return None
 
         with torch.no_grad():
-            adjacent_similarities = torch.nn.functional.cosine_similarity(
-                features[:-1],
-                features[1:],
-                dim=-1,
-            )
-            adjacent_similarities = torch.clamp(adjacent_similarities, min=0.0)
-            acm = float(adjacent_similarities.mean().item())
-
-            if len(features) >= 3:
-                velocity = (features[1:] - features[:-1]).norm(dim=1)
-                acceleration = (
-                    features[2:] - 2 * features[1:-1] + features[:-2]
-                ).norm(dim=1)
-                denom = 0.5 * (velocity[1:] + velocity[:-1]) + 1e-8
-                tji_tensor = (acceleration / denom).mean()
-                tji_score = float(torch.exp(-0.5 * tji_tensor).item())
-            else:
-                tji_score = 1.0
-
-            score = 0.5 * clamp01(acm) + 0.5 * clamp01(tji_score)
-            if not math.isfinite(score):
-                return 0.0
+            acm = self._compute_acm(generated_features)
+            tji = self._compute_tji(generated_features)
+            score = acm / (1.0 + tji)
             return clamp01(float(score))
 
+    def _compute_acm(self, features: Any) -> float:
+        # 计算相邻帧 DINO 特征余弦相似度，作为外观连续性的主项。
+        adjacent_similarities = torch.nn.functional.cosine_similarity(
+            features[:-1],
+            features[1:],
+            dim=-1,
+        )
+        adjacent_similarities = torch.clamp(adjacent_similarities, min=0.0)
+        return clamp01(float(adjacent_similarities.mean().item()))
+
+    def _compute_tji(self, features: Any) -> float:
+        # 计算归一化二阶特征变化，作为帧间闪烁和突变的惩罚项。
+        if len(features) < 3:
+            return 0.0
+
+        velocity = (features[1:] - features[:-1]).norm(dim=1)
+        acceleration = (features[2:] - 2 * features[1:-1] + features[:-2]).norm(dim=1)
+        denominator = 0.5 * (velocity[1:] + velocity[:-1]) + self.eps
+        jitter = (acceleration / denominator).mean()
+        return max(0.0, float(jitter.item()))
+
     def _ensure_dino(self) -> str | None:
+        # 检查设备和本地模型资源，按需加载 DINO 主干与图像预处理流水线。
         if self._dino_model is not None and self._transform is not None:
             return None
 
-        try:
-            import torch  # type: ignore
-
-            self._torch = torch
-        except Exception as exc:  # noqa: BLE001
-            return f"torch is required for appearance_consistency: {type(exc).__name__}: {exc}"
-
-        if self.device == "cuda" and not self._torch.cuda.is_available():
+        if self.device == "cuda" and not torch.cuda.is_available():
             self.device = "cpu"
 
-        try:
-            from PIL import Image  # type: ignore
-
-            self._pil_image = Image
-        except Exception as exc:  # noqa: BLE001
-            return f"PIL is required for appearance_consistency: {type(exc).__name__}: {exc}"
-
-        try:
-            from torchvision import transforms  # type: ignore
-            from torchvision.transforms import functional as TF  # type: ignore
-
-            self._torchvision_transforms = transforms
-            self._torchvision_tf = TF
-        except Exception as exc:  # noqa: BLE001
-            return f"torchvision is required for appearance_consistency: {type(exc).__name__}: {exc}"
-
         if not self.repo_path:
-            return (
-                "DINO repo path is required. Set config['repo_or_dir'] or "
-                "config['dino_repo_path'] to the local DINO repository."
-            )
-
+            return "Missing DINO repo path: set config['repo_path']."
         repo_path = Path(str(self.repo_path)).expanduser().resolve()
         if not repo_path.exists():
             return f"DINO repo path does not exist: {repo_path}"
@@ -279,17 +230,13 @@ class AppearanceConsistencyMetric:
             sys.path.insert(0, str(repo_path))
 
         if not self.weight_path:
-            return (
-                "DINO weights path is required. Set config['weights_path'] or "
-                "config['dino_weight_path'] to a local DINO .pth file."
-            )
-
+            return "Missing DINO weight path: set config['weight_path']."
         weight_path = Path(str(self.weight_path)).expanduser().resolve()
         if not weight_path.exists():
-            return f"DINO weights path does not exist: {weight_path}"
+            return f"DINO weight path does not exist: {weight_path}"
 
         try:
-            model = self._torch.hub.load(
+            model = torch.hub.load(
                 str(repo_path),
                 self.model_name,
                 source="local",
@@ -297,7 +244,7 @@ class AppearanceConsistencyMetric:
             )
             model.to(self.device)
 
-            state_dict = self._torch.load(str(weight_path), map_location=self.device)
+            state_dict = torch.load(str(weight_path), map_location=self.device)
             model.load_state_dict(state_dict, strict=self.strict_load)
 
             if self.use_fp16 and self.device == "cuda":
@@ -306,23 +253,16 @@ class AppearanceConsistencyMetric:
             model.eval()
             self._dino_model = model
             self._transform = self._build_transform()
-            return None
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._dino_model = None
             self._transform = None
-            return f"Failed to load DINO model: {type(exc).__name__}: {exc}"
+            return f"Failed to load DINO model: {exc}"
+
+        return None
 
     def _build_transform(self) -> Any:
-        transforms = self._torchvision_transforms
-        TF = self._torchvision_tf
-        if transforms is None or TF is None:
-            raise RuntimeError("torchvision transforms are not initialized")
-
+        # 构建与 DINO 输入要求一致的尺寸变换和 ImageNet 归一化流程。
         def robust_to_tensor(x: Any) -> Any:
-            torch = self._torch
-            if torch is None:
-                raise RuntimeError("torch is not initialized")
-
             if isinstance(x, torch.Tensor):
                 if x.dtype == torch.uint8:
                     return x.float() / 255.0
@@ -346,18 +286,13 @@ class AppearanceConsistencyMetric:
         )
 
     def _extract_dino_features(self, frames: list[Any]) -> Any:
-        torch = self._torch
-        if torch is None:
-            raise RuntimeError("torch is not initialized")
+        # 将视频帧批量送入 DINO，并对输出特征进行 L2 归一化。
         if self._dino_model is None or self._transform is None:
             raise RuntimeError("DINO model is not initialized")
 
-        images = []
-        for frame_rgb in frames:
-            pil_img = self._pil_image.fromarray(frame_rgb)
-            images.append(self._transform(pil_img))
+        images = [self._transform(Image.fromarray(frame_rgb)) for frame_rgb in frames]
+        features_list: list[Any] = []
 
-        features_list = []
         with torch.no_grad():
             for start in range(0, len(images), self.batch_size):
                 batch = images[start : start + self.batch_size]
@@ -373,8 +308,8 @@ class AppearanceConsistencyMetric:
             return None
         return torch.cat(features_list, dim=0)
 
-    def _read_all_frames(self, video_path: str) -> list[Any]:
-        cv2 = self._get_cv2()
+    def _read_all_frames(self, video_path: Path) -> list[Any]:
+        # 使用 OpenCV 顺序读取视频帧，并统一转换为 RGB 格式。
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             cap.release()
@@ -392,33 +327,34 @@ class AppearanceConsistencyMetric:
             cap.release()
         return frames
 
-    def _get_cv2(self) -> Any:
-        if self._cv2 is not None:
-            return self._cv2
 
-        try:
-            import cv2  # type: ignore
-
-            self._cv2 = cv2
-            return cv2
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"cv2 is required for appearance_consistency: {exc}") from exc
+def skipped_result(sample_id: str, reason: str) -> dict[str, Any]:
+    # 生成统一的样本级跳过结果，便于上层汇总。
+    return {"sample_id": sample_id, "status": "skipped", "reason": reason}
 
 
-AppearanceConsistency = AppearanceConsistencyMetric
+def simplify_sample_result(result: dict[str, Any]) -> dict[str, Any]:
+    # 仅保留样本编号和原因，避免 details 中重复写入冗余字段。
+    return {
+        "sample_id": result.get("sample_id", "unknown"),
+        "reason": result.get("reason", "unknown"),
+    }
 
 
 def mean_or_none(values: list[float]) -> float | None:
+    # 对有效分数求均值；空列表返回 None 以表示没有可用结果。
     if not values:
         return None
     return float(sum(values) / len(values))
 
 
 def is_finite_number(value: Any) -> bool:
+    # 检查输入是否为有限数值，过滤 None、NaN 和无穷大。
     return isinstance(value, (int, float)) and math.isfinite(float(value))
 
 
 def clamp01(value: float) -> float:
+    # 将分数裁剪到 0 到 1 区间，保证指标输出范围稳定。
     if not math.isfinite(float(value)):
         return 0.0
     return max(0.0, min(1.0, float(value)))

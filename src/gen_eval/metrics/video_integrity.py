@@ -1,5 +1,3 @@
-"""Video integrity metric for fixed multi-view driving video samples."""
-
 from __future__ import annotations
 
 import math
@@ -18,9 +16,7 @@ EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
 
 _CV2 = None
 
-
 class VideoIntegrityMetric:
-    """Check whether each sample is a complete and synchronized multi-view video."""
 
     name = "video_integrity"
 
@@ -219,9 +215,7 @@ class VideoIntegrityMetric:
             "failed_checks": failed_checks,
         }
 
-
 VideoIntegrity = VideoIntegrityMetric
-
 
 def missing_video_info() -> dict[str, Any]:
     return {
@@ -237,7 +231,6 @@ def missing_video_info() -> dict[str, Any]:
         "backend": None,
         "reason": "missing from camera_videos",
     }
-
 
 def inspect_video(path: str | None) -> dict[str, Any]:
     if not path:
@@ -343,7 +336,6 @@ def inspect_video(path: str | None) -> dict[str, Any]:
         info["reason"] = f"imageio failed: {type(exc).__name__}: {exc}"
         return info
 
-
 def get_cv2() -> Any:
     global _CV2
     if _CV2 is not None:
@@ -355,7 +347,6 @@ def get_cv2() -> Any:
         return cv2
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"cv2 is required but unavailable: {exc}") from exc
-
 
 def numeric_consistency_pass(
     values: list[Any],
@@ -372,7 +363,6 @@ def numeric_consistency_pass(
 
     rel_devs = [abs(value - median) / median for value in nums]
     return max(rel_devs) <= tolerance
-
 
 def resolution_consistency_pass(
     sizes: list[tuple[Any, Any]],
@@ -392,7 +382,6 @@ def resolution_consistency_pass(
         return False
     return len(set(valid_sizes)) == 1
 
-
 def positive_finite_numbers(values: list[Any]) -> list[float]:
     nums = []
     for value in values:
@@ -403,10 +392,8 @@ def positive_finite_numbers(values: list[Any]) -> list[float]:
             nums.append(number)
     return nums
 
-
 def is_finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(float(value))
-
 
 def safe_div(a: float, b: float) -> float:
     if b == 0:

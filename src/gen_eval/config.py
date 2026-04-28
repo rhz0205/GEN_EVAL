@@ -8,33 +8,22 @@ from gen_eval.result_writer import default_output_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-
 def load_yaml(path: str | Path) -> dict[str, Any]:
-    """读取配置信息，并返回解析后的配置字典"""
     config_path = Path(path)
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"Config root must be an object: {config_path}")
     return data
 
-
 def resolve_dataset_config(dataset: str) -> tuple[Path, dict[str, Any]]:
-    """根据数据集名称构建数据集配置路径，并加载配置内容"""
     dataset_config_path = PROJECT_ROOT / "configs" / "datasets" / f"{dataset}.yaml"
     return dataset_config_path, load_yaml(dataset_config_path)
 
-
 def resolve_metric_config() -> tuple[Path, dict[str, Any]]:
-    """构建指标配置路径，并加载配置内容"""
     metric_config_path = PROJECT_ROOT / "configs" / "metrics.yaml"
     return metric_config_path, load_yaml(metric_config_path)
 
-
 def normalize_runtime_config(runtime: dict[str, Any] | None) -> dict[str, Any]:
-    """规范化运行时配置，设置默认值并验证字段类型
-    - ray: 使用 Ray 分布式执行，默认地址为 "auto"，默认并发任务上限数为0
-    - local: 使用本地执行，默认并发任务上限数为0
-    """
     runtime_config = dict(runtime or {})
     backend = runtime_config.get("backend", "local")
     if not isinstance(backend, str):
@@ -56,9 +45,7 @@ def normalize_runtime_config(runtime: dict[str, Any] | None) -> dict[str, Any]:
 
     return runtime_config
 
-
 def resolve_run_config(config_path: str | Path) -> dict[str, Any]:
-    """解析运行配置，验证必需字段，并构建完整的运行配置字典"""
     run_config_path = Path(config_path).resolve()
     run_config = load_yaml(run_config_path)
     run_name_value = run_config.get("run_name")
@@ -101,18 +88,6 @@ def resolve_run_config(config_path: str | Path) -> dict[str, Any]:
     dataset_name = dataset_config.get("dataset_name") or dataset
     output_dir = default_output_dir(str(dataset_name), run_name)
 
-    # 构建完整的运行配置字典：
-    # - run_name: 运行名称，默认为配置文件名
-    # - dataset: 数据集标识
-    # - dataset_name: 数据集名称，优先使用数据集配置中的 dataset_name
-    # - manifest_path: 数据集清单路径，从数据集配置中获取
-    # - output_dir: 结果输出目录，基于数据集名称和运行名称构建
-    # - runtime: 运行时配置，包含执行后端和相关参数
-    # - metrics: 选定的指标及其配置，合并了指标配置
-    # - config_path: 原始运行配置文件路径
-    # - dataset_config_path: 数据集配置文件路径
-    # - metric_config_path: 指标配置文件路径
-    # - selected_metrics: 选定的指标名称列表
     return {
         "run_name": run_name,
         "dataset": dataset,

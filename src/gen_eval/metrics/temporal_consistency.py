@@ -1,10 +1,14 @@
-"""CLIP-based temporal consistency metric for fixed multi-view videos."""
-
 from __future__ import annotations
 
 import math
 from pathlib import Path
 from typing import Any
+
+import clip
+import cv2
+import torch
+from PIL import Image
+
 
 EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
     "camera_front",
@@ -15,38 +19,29 @@ EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
     "camera_rear",
 )
 
+EPS = 1e-8
 
-class TemporalConsistencyMetric:
-    """Measure CLIP-based temporal stability across fixed driving-camera views."""
 
+class TemporalConsistency:
     name = "temporal_consistency"
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config = config or {}
+
+        # 读取指标运行所需的最小配置，权重路径统一使用 weight_path，避免同一含义存在多套配置键。
         self.camera_videos_key = self.config.get("camera_videos_key", "camera_videos")
         self.device = self.config.get("device", "cuda")
-        self.weight_path = (
-            self.config.get("weight_path")
-            or self.config.get("clip_weight_path")
-            or self.config.get("local_save_path")
-        )
+        self.weight_path = self.config.get("weight_path")
         self.batch_size = int(self.config.get("batch_size", 16))
 
-        self._torch = None
-        self._clip = None
-        self._cv2 = None
-        self._pil_image = None
-        self._clip_model = None
-        self._preprocess = None
+        # CLIP 模型和预处理流程采用延迟初始化，避免每次构造指标对象时立即加载大模型。
+        self._clip_model: Any | None = None
+        self._preprocess: Any | None = None
 
     def evaluate(self, samples: list[Any]) -> dict[str, Any]:
-        evaluated_samples: list[dict[str, Any]] = []
-        skipped_samples: list[dict[str, Any]] = []
-        failed_samples: list[dict[str, Any]] = []
-        valid_scores: list[float] = []
-
-        runtime_status = self._ensure_clip()
-        if runtime_status is not None:
+        # 先完成 CLIP 运行环境和权重检查；若整体运行条件不满足，仅在顶层记录原因。
+        runtime_error = self._ensure_clip()
+        if runtime_error is not None:
             return {
                 "metric": self.name,
                 "status": "skipped",
@@ -55,24 +50,23 @@ class TemporalConsistencyMetric:
                 "mean_temporal_consistency_score": None,
                 "details": {
                     "evaluated_samples": [],
-                    "skipped_samples": [
-                        {
-                            "sample_id": getattr(sample, "sample_id", "unknown"),
-                            "reason": runtime_status,
-                        }
-                        for sample in samples
-                    ],
+                    "skipped_samples": [],
                     "failed_samples": [],
                 },
-                "reason": runtime_status,
+                "reason": runtime_error,
             }
 
+        evaluated_samples: list[dict[str, Any]] = []
+        skipped_samples: list[dict[str, Any]] = []
+        failed_samples: list[dict[str, Any]] = []
+        valid_scores: list[float] = []
+
+        # 逐样本执行多视角时序一致性评价，并将成功、跳过和失败样本分开记录。
         for sample in samples:
             sample_id = getattr(sample, "sample_id", None) or "unknown"
-
             try:
                 sample_result = self._evaluate_sample(sample)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 sample_result = {
                     "sample_id": sample_id,
                     "status": "failed",
@@ -81,30 +75,21 @@ class TemporalConsistencyMetric:
 
             status = sample_result.get("status")
             score = sample_result.get("temporal_consistency_score")
-
             if status == "success" and is_finite_number(score):
+                valid_score = float(score)
+                valid_scores.append(valid_score)
                 evaluated_samples.append(
                     {
                         "sample_id": sample_id,
-                        "temporal_consistency_score": float(score),
-                    }
-                )
-                valid_scores.append(float(score))
-            elif status == "skipped":
-                skipped_samples.append(
-                    {
-                        "sample_id": sample_id,
-                        "reason": sample_result.get("reason", "unknown"),
+                        "temporal_consistency_score": valid_score,
                     }
                 )
             elif status == "failed":
-                failed_samples.append(
-                    {
-                        "sample_id": sample_id,
-                        "reason": sample_result.get("reason", "unknown"),
-                    }
-                )
+                failed_samples.append(simplify_sample_result(sample_result))
+            else:
+                skipped_samples.append(simplify_sample_result(sample_result))
 
+        # 数据集级结果采用有效样本均值；没有有效分数时，根据是否存在失败样本确定最终状态。
         mean_score = mean_or_none(valid_scores)
         if mean_score is not None:
             status = "success"
@@ -125,7 +110,7 @@ class TemporalConsistencyMetric:
                 "failed_samples": failed_samples,
             },
         }
-        if reason:
+        if reason is not None:
             result["reason"] = reason
         return result
 
@@ -134,26 +119,28 @@ class TemporalConsistencyMetric:
         metadata = getattr(sample, "metadata", None) or {}
         camera_videos = metadata.get(self.camera_videos_key)
 
+        # 当前指标面向固定六视角驾驶视频，先检查 metadata 中是否提供完整 camera_videos 字典。
         if not isinstance(camera_videos, dict) or not camera_videos:
-            return {
-                "sample_id": sample_id,
-                "status": "skipped",
-                "reason": "metadata['camera_videos'] is required and must be a non-empty dict.",
-            }
+            return skipped_result(
+                sample_id,
+                f"metadata['{self.camera_videos_key}'] must be a non-empty dict.",
+            )
 
         normalized_videos = {
-            str(view): str(path) for view, path in camera_videos.items() if path is not None
+            str(view): str(path)
+            for view, path in camera_videos.items()
+            if path is not None
         }
         missing_views = [
             view for view in EXPECTED_CAMERA_VIEWS if view not in normalized_videos
         ]
         if missing_views:
-            return {
-                "sample_id": sample_id,
-                "status": "skipped",
-                "reason": f"Missing expected camera views: {', '.join(missing_views)}.",
-            }
+            return skipped_result(
+                sample_id,
+                f"Missing expected camera views: {', '.join(missing_views)}.",
+            )
 
+        # 每个视角独立计算 CLIP 时序一致性，样本分数取所有有效视角的平均值。
         view_scores: list[float] = []
         for view in EXPECTED_CAMERA_VIEWS:
             view_score = self._evaluate_view_video(normalized_videos[view])
@@ -161,11 +148,10 @@ class TemporalConsistencyMetric:
                 view_scores.append(float(view_score))
 
         if not view_scores:
-            return {
-                "sample_id": sample_id,
-                "status": "skipped",
-                "reason": "No expected camera view produced a valid temporal consistency score.",
-            }
+            return skipped_result(
+                sample_id,
+                "No expected camera view produced a valid temporal consistency score.",
+            )
 
         return {
             "sample_id": sample_id,
@@ -174,11 +160,12 @@ class TemporalConsistencyMetric:
         }
 
     def _evaluate_view_video(self, video_path: str) -> float | None:
+        # 单视角评价流程为：读取视频帧、提取 CLIP 特征、计算 ACM 与 TJI 聚合分数。
         path = Path(video_path)
-        if not path.exists() or not path.is_file():
+        if not path.is_file():
             return None
 
-        frames = self._read_all_frames(video_path)
+        frames = self._read_all_frames(path)
         if len(frames) < 2:
             return None
 
@@ -189,76 +176,53 @@ class TemporalConsistencyMetric:
         return self._compute_temporal_consistency_score(features)
 
     def _compute_temporal_consistency_score(self, features: Any) -> float | None:
-        torch = self._torch
-        if torch is None:
-            raise RuntimeError("torch is not initialized")
         if features is None or len(features) < 2:
             return None
 
+        # ACM 衡量相邻帧 CLIP 特征相似度，TJI 衡量二阶特征波动，最终以抖动惩罚形式聚合。
         with torch.no_grad():
-            adjacent_similarities = torch.nn.functional.cosine_similarity(
-                features[:-1],
-                features[1:],
-                dim=-1,
-            )
-            adjacent_similarities = torch.clamp(adjacent_similarities, min=0.0)
-            acm = float(adjacent_similarities.mean().item())
-
-            if len(features) >= 3:
-                velocity = (features[1:] - features[:-1]).norm(dim=1)
-                acceleration = (
-                    features[2:] - 2 * features[1:-1] + features[:-2]
-                ).norm(dim=1)
-                denom = 0.5 * (velocity[1:] + velocity[:-1]) + 1e-8
-                tji_tensor = (acceleration / denom).mean()
-                tji = float(tji_tensor.item())
-            else:
-                tji = 0.0
-
+            acm = self._compute_acm(features)
+            tji = self._compute_tji(features)
             score = acm / (1.0 + tji)
-            if not math.isfinite(score):
-                return 0.0
             return clamp01(float(score))
+
+    def _compute_acm(self, features: Any) -> float:
+        adjacent_similarities = torch.nn.functional.cosine_similarity(
+            features[:-1],
+            features[1:],
+            dim=-1,
+        )
+        adjacent_similarities = torch.clamp(adjacent_similarities, min=0.0)
+        return clamp01(float(adjacent_similarities.mean().item()))
+
+    def _compute_tji(self, features: Any) -> float:
+        if len(features) < 3:
+            return 0.0
+
+        velocity = (features[1:] - features[:-1]).norm(dim=1)
+        acceleration = (features[2:] - 2 * features[1:-1] + features[:-2]).norm(dim=1)
+        denominator = 0.5 * (velocity[1:] + velocity[:-1]) + EPS
+        jitter = (acceleration / denominator).mean()
+        return max(0.0, float(jitter.item()))
 
     def _ensure_clip(self) -> str | None:
         if self._clip_model is not None and self._preprocess is not None:
             return None
 
-        try:
-            import torch  # type: ignore
-
-            self._torch = torch
-        except Exception as exc:  # noqa: BLE001
-            return f"torch is required for temporal_consistency: {type(exc).__name__}: {exc}"
-
-        if self.device == "cuda" and not self._torch.cuda.is_available():
+        # 根据可用设备确定推理位置，并检查本地 CLIP 权重路径是否存在。
+        if self.device == "cuda" and not torch.cuda.is_available():
             self.device = "cpu"
 
-        try:
-            import clip  # type: ignore
-
-            self._clip = clip
-        except Exception as exc:  # noqa: BLE001
-            return f"clip package is required for temporal_consistency: {type(exc).__name__}: {exc}"
-
-        try:
-            from PIL import Image  # type: ignore
-
-            self._pil_image = Image
-        except Exception as exc:  # noqa: BLE001
-            return f"PIL is required for temporal_consistency: {type(exc).__name__}: {exc}"
-
         if not self.weight_path:
-            return (
-                "CLIP weight path is required. Set config['clip_weight_path'] to a local CLIP .pt file."
-            )
+            return "CLIP weight path is required. Set config['weight_path'] to a local CLIP .pt file."
 
         weight_path = Path(str(self.weight_path)).expanduser().resolve()
         if not weight_path.exists():
             return f"CLIP weight path does not exist: {weight_path}"
 
+        # 加载 CLIP 图像编码器及其预处理函数，后续所有帧特征均由该模型抽取。
         try:
-            model, preprocess = self._clip.load(
+            model, preprocess = clip.load(
                 str(weight_path),
                 device=self.device,
                 jit=False,
@@ -267,38 +231,33 @@ class TemporalConsistencyMetric:
             self._clip_model = model
             self._preprocess = preprocess
             return None
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._clip_model = None
             self._preprocess = None
             return f"Failed to load CLIP model: {type(exc).__name__}: {exc}"
 
     def _extract_clip_features(self, frames: list[Any]) -> Any:
-        torch = self._torch
-        if torch is None:
-            raise RuntimeError("torch is not initialized")
         if self._clip_model is None or self._preprocess is None:
             raise RuntimeError("CLIP model is not initialized")
 
-        images = []
-        for frame_rgb in frames:
-            pil_img = self._pil_image.fromarray(frame_rgb)
-            images.append(self._preprocess(pil_img))
+        # 将 RGB 帧转换为 PIL 图像并执行 CLIP 预处理，然后按 batch 提取归一化图像特征。
+        images = [self._preprocess(Image.fromarray(frame_rgb)) for frame_rgb in frames]
+        features_list: list[Any] = []
 
-        all_features = []
         with torch.no_grad():
             for start in range(0, len(images), self.batch_size):
                 batch = images[start : start + self.batch_size]
                 batch_tensor = torch.stack(batch, dim=0).to(self.device)
                 features = self._clip_model.encode_image(batch_tensor)
                 features = torch.nn.functional.normalize(features, dim=-1, p=2)
-                all_features.append(features)
+                features_list.append(features)
 
-        if not all_features:
+        if not features_list:
             return None
-        return torch.cat(all_features, dim=0)
+        return torch.cat(features_list, dim=0)
 
-    def _read_all_frames(self, video_path: str) -> list[Any]:
-        cv2 = self._get_cv2()
+    def _read_all_frames(self, video_path: Path) -> list[Any]:
+        # 保持当前实现的一次性读帧策略，仅完成 BGR 到 RGB 的颜色空间转换。
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             cap.release()
@@ -316,21 +275,16 @@ class TemporalConsistencyMetric:
             cap.release()
         return frames
 
-    def _get_cv2(self) -> Any:
-        if self._cv2 is not None:
-            return self._cv2
 
-        try:
-            import cv2  # type: ignore
-
-            self._cv2 = cv2
-            return cv2
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"cv2 is required for temporal_consistency: {exc}") from exc
+def skipped_result(sample_id: str, reason: str) -> dict[str, Any]:
+    return {"sample_id": sample_id, "status": "skipped", "reason": reason}
 
 
-TemporalConsistency = TemporalConsistencyMetric
-TEMPORAL_CONSISTENCY = TemporalConsistencyMetric
+def simplify_sample_result(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "sample_id": result.get("sample_id", "unknown"),
+        "reason": result.get("reason", "unknown"),
+    }
 
 
 def mean_or_none(values: list[float]) -> float | None:

@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Generate lightweight 6-view visualizations for GEN_EVAL samples."""
-
 from __future__ import annotations
 
 import argparse
@@ -21,7 +19,6 @@ from gen_eval.visualization.layout import FIXED_VIEW_ORDER, make_6v_montage_fram
 from gen_eval.visualization.semantic import build_semantic_outputs
 from gen_eval.visualization.video_io import inspect_video, read_all_frames, read_first_frame, write_image, write_video
 from gen_eval.visualization.view_match import build_view_match_outputs
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Visualize GEN_EVAL 6-view results.")
@@ -57,7 +54,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--depth-input-size", type=int, default=400, help="Depth input size.")
     parser.add_argument("--depth-target-fps", type=int, default=12, help="Depth target fps.")
     return parser
-
 
 def main() -> int:
     parser = build_parser()
@@ -120,13 +116,11 @@ def main() -> int:
             print(f"  [{vis_type}] {status}: {message}")
     return 0
 
-
 def normalize_types(raw_value: str) -> list[str]:
     requested = [item.strip() for item in str(raw_value).split(",") if item.strip()]
     if not requested or "all" in requested:
         return ["rgb", "integrity", "view_match", "depth", "semantic", "instance"]
     return requested
-
 
 def parse_frame_indices(raw_value: str | None) -> list[int] | None:
     if not raw_value:
@@ -142,10 +136,8 @@ def parse_frame_indices(raw_value: str | None) -> list[int] | None:
             continue
     return sorted(set(index for index in indices if index >= 0))
 
-
 def load_manifest_payload(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
-
 
 def extract_samples(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
@@ -155,7 +147,6 @@ def extract_samples(payload: Any) -> list[dict[str, Any]]:
         if isinstance(samples, list):
             return [item for item in samples if isinstance(item, dict)]
     raise ValueError("Manifest JSON must be a list or an object with a 'samples' list.")
-
 
 def select_samples(
     samples: list[dict[str, Any]],
@@ -169,7 +160,6 @@ def select_samples(
         return samples
     return samples[: max(0, int(max_samples))]
 
-
 def normalize_camera_videos(value: Any) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
@@ -178,7 +168,6 @@ def normalize_camera_videos(value: Any) -> dict[str, str]:
         for view, path in value.items()
         if path is not None and str(view) in FIXED_VIEW_ORDER
     }
-
 
 def run_visualization_type(
     vis_type: str,
@@ -266,7 +255,6 @@ def run_visualization_type(
         )
     return False, f"Unknown visualization type: {vis_type}"
 
-
 def build_rgb_montage(
     sample_id: str,
     camera_videos: dict[str, str],
@@ -309,7 +297,6 @@ def build_rgb_montage(
     write_video(output_dir / f"{sample_id}_6v_rgb.mp4", montage_frames, fps=12.0)
     return True, f"wrote {len(montage_frames)} frames"
 
-
 def build_integrity_image(
     sample_id: str,
     camera_videos: dict[str, str],
@@ -327,7 +314,6 @@ def build_integrity_image(
     )
     write_image(output_dir / f"{sample_id}_video_integrity_overview.jpg", overview)
     return True, "wrote overview image"
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

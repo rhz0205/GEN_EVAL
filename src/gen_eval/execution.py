@@ -18,9 +18,7 @@ from gen_eval.evaluator import (
 )
 from gen_eval.metrics import register_builtin_metrics
 
-
 def run_evaluation(config: dict[str, Any]) -> dict[str, Any]:
-    """根据运行配置执行评估，支持本地和Ray分布式两种后端"""
     runtime = config.get("runtime") or {}
     backend = runtime.get("backend", "local")
     if not isinstance(backend, str):
@@ -33,23 +31,13 @@ def run_evaluation(config: dict[str, Any]) -> dict[str, Any]:
         return _run_ray(config)
     raise ValueError(f"Unsupported runtime backend: {backend}")
 
-
 def _run_local(config: dict[str, Any]) -> dict[str, Any]:
     evaluator = Evaluator(config)
     return evaluator.run()
 
-
-# Ray 的执行流程（例如 1000 个样本评估 6 个指标）：
-# 1. 加载 manifest，并将样本转换为可序列化的 payload。
-# 2. 根据 shard_size 将样本切分为多个 shard。
-# 3. 遍历每个指标，为每个 shard 提交一个 Ray task。
-#    例如：metric_a + shard_001 -> task, metric_a + shard_002 -> task。
-# 4. 每个 task 内部对一批样本运行同一个指标，避免一个样本一个 task 造成过高调度开销。
-# 5. 合并所有 shard-level partial results，得到该指标的最终结果。
 def _run_ray(config: dict[str, Any]) -> dict[str, Any]:
-    """使用 Ray 分布式执行评估，按指标与样本分片并行计算并合并结果。"""
     try:
-        import ray 
+        import ray
     except ImportError as exc:
         raise RuntimeError(
             "Ray backend requested, but ray is not installed in the local environment."
@@ -157,18 +145,15 @@ def _run_ray(config: dict[str, Any]) -> dict[str, Any]:
         "results": results,
     }
 
-
 def _split_into_shards(items: list[Any], shard_size: int) -> list[list[Any]]:
     if shard_size <= 0:
         raise ValueError("shard_size must be a positive integer.")
     return [items[i : i + shard_size] for i in range(0, len(items), shard_size)]
 
-
 def _coerce_non_negative_float(value: Any, default: float) -> float:
     if isinstance(value, (int, float)) and value >= 0:
         return float(value)
     return default
-
 
 def _ray_gather_limited(
     ray_module: Any, refs: list[Any], max_in_flight: int
@@ -187,7 +172,6 @@ def _ray_gather_limited(
         if remaining:
             active.append(remaining.pop(0))
     return ready_results
-
 
 def _merge_metric_results(
     metric_name: str,
@@ -294,7 +278,6 @@ def _merge_metric_results(
     result["details"]["total_samples_seen"] = total_samples
     return result
 
-
 def _merge_scoreless_metric_results(
     metric_name: str,
     partial_results: list[dict[str, Any]],
@@ -309,7 +292,6 @@ def _merge_scoreless_metric_results(
             total_samples,
         )
     return None
-
 
 def _merge_video_integrity_results(
     partial_results: list[dict[str, Any]],
@@ -358,7 +340,6 @@ def _merge_video_integrity_results(
     if reason:
         result["reason"] = reason
     return result
-
 
 def _merge_named_score_metric_results(
     metric_name: str,
@@ -432,7 +413,6 @@ def _merge_named_score_metric_results(
         result["reason"] = reason
     return result
 
-
 def _merge_detail_lists(
     partial_results: list[dict[str, Any]],
     total_samples: int,
@@ -457,11 +437,9 @@ def _merge_detail_lists(
     detail_payload["total_samples_seen"] = total_samples
     return detail_payload
 
-
 class _SamplePayloadProxy:
     def __init__(self, payload: dict[str, Any]) -> None:
         self.sample_id = payload.get("sample_id") or "unknown"
-
 
 def _coerce_positive_int(value: Any) -> int | None:
     if value is None:
@@ -470,12 +448,10 @@ def _coerce_positive_int(value: Any) -> int | None:
         return value
     return None
 
-
 def _is_numeric_mapping(value: dict[str, Any]) -> bool:
     if not value:
         return False
     return all(isinstance(item, (int, float)) for item in value.values())
-
 
 def _merge_numeric_mappings(
     weighted_values: list[tuple[dict[str, Any], int]],
