@@ -36,6 +36,12 @@ class PlaceholderMetric:
         }
 
 
+# 1. 调用 register_builtin_metrics()
+# 2. metrics/__init__.py 中导入所有内置指标类，并在 register_builtin_metrics 中注册它们到 registry
+# 3. registry.register(metric_class)
+# 4. registry._metrics 中保存 name → class
+# 5. evaluator.py 调用 registry.get(metric_name)
+# 6. 拿到 metric class
 def register_builtin_metrics() -> None:
     from .appearance_consistency import AppearanceConsistencyMetric
     from .depth_consistency import DepthConsistencyMetric
@@ -43,14 +49,6 @@ def register_builtin_metrics() -> None:
     from .semantic_consistency import SemanticConsistencyMetric
     from .temporal_consistency import TemporalConsistencyMetric
     from .view_consistency import ViewConsistencyMetric
-
-    fvd_metric = None
-    try:
-        from .fvd import FVDMetric
-
-        fvd_metric = FVDMetric
-    except ModuleNotFoundError:
-        fvd_metric = None
 
     metric_classes = [
         ViewConsistencyMetric,
@@ -60,8 +58,6 @@ def register_builtin_metrics() -> None:
         DepthConsistencyMetric,
         InstanceConsistencyMetric,
     ]
-    if fvd_metric is not None:
-        metric_classes.insert(0, fvd_metric)
 
     for metric_class in metric_classes:
         registry.register(metric_class)

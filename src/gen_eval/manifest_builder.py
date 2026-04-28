@@ -120,7 +120,7 @@ def convert_pkl_to_manifest(
     sample_total: int | None = None,
     seed: int = 42,
     keep_extra_fields: bool = True,
-    detect_camera_video_dirs: bool = False,
+    detect_camera_videos: bool = False,
     primary_camera: str = "camera_front",
     camera_ext: str = ".mp4",
     keep_front_tele: bool = False,
@@ -150,7 +150,7 @@ def convert_pkl_to_manifest(
         "video_field": video_field,
         "hdmap_field": hdmap_field,
         "keep_extra_fields": keep_extra_fields,
-        "detect_camera_video_dirs": detect_camera_video_dirs,
+        "detect_camera_videos": detect_camera_videos,
         "primary_camera": primary_camera,
         "camera_ext": camera_ext,
         "keep_front_tele": keep_front_tele,
@@ -247,7 +247,7 @@ def convert_pkl_to_manifest(
             "primary_camera": None,
             "fallback_primary_camera": False,
         }
-        if detect_camera_video_dirs:
+        if detect_camera_videos:
             camera_info = detect_camera_videos(
                 original_video,
                 primary_camera=primary_camera,
@@ -337,7 +337,9 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def write_shards(output: Path, records: list[dict[str, Any]], shard_size: int) -> list[str]:
+def write_shards(
+    output: Path, records: list[dict[str, Any]], shard_size: int
+) -> list[str]:
     output.parent.mkdir(parents=True, exist_ok=True)
     stem = output.stem
     suffix = output.suffix or ".json"
@@ -370,14 +372,18 @@ def infer_dataset_split(dataset_name: str | None) -> str | None:
     return mapping.get(dataset_name)
 
 
-def infer_output_path(dataset_name: str | None, dataset_split: str | None) -> Path | None:
+def infer_output_path(
+    dataset_name: str | None, dataset_split: str | None
+) -> Path | None:
     effective_split = dataset_split or infer_dataset_split(dataset_name)
     if not dataset_name or not effective_split:
         return None
     return Path("manifests") / f"{effective_split}.json"
 
 
-def infer_stats_path(dataset_name: str | None, dataset_split: str | None) -> Path | None:
+def infer_stats_path(
+    dataset_name: str | None, dataset_split: str | None
+) -> Path | None:
     effective_split = dataset_split or infer_dataset_split(dataset_name)
     if not dataset_name or not effective_split:
         return None
@@ -423,7 +429,9 @@ def summarize_records(
         views = metadata.get("views")
         if isinstance(views, list):
             view_count = len(views)
-            view_count_distribution[view_count] = view_count_distribution.get(view_count, 0) + 1
+            view_count_distribution[view_count] = (
+                view_count_distribution.get(view_count, 0) + 1
+            )
 
     print("\nSummary")
     print(f"output_manifest_path: {output_manifest_path}")
@@ -458,7 +466,7 @@ def build_manifest_from_pkl(
     dedupe: bool = True,
     check_exists: bool = False,
     keep_extra_fields: bool = True,
-    detect_camera_videos_dirs: bool = False,
+    detect_camera_videos: bool = False,
     primary_camera: str = "camera_front",
     camera_ext: str = ".mp4",
     keep_front_tele: bool = False,
@@ -499,11 +507,14 @@ def build_manifest_from_pkl(
         sample_total=sample_total,
         seed=seed,
         keep_extra_fields=keep_extra_fields,
-        detect_camera_video_dirs=detect_camera_videos_dirs,
+        detect_camera_videos=detect_camera_videos,
         primary_camera=primary_camera,
         camera_ext=camera_ext,
         keep_front_tele=keep_front_tele,
     )
+
+    if shard_size is not None and shard_size <= 0:
+        raise ValueError("shard_size must be a positive integer.")
 
     if shard_size:
         shard_paths = write_shards(output_path, records, shard_size)

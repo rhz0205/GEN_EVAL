@@ -9,12 +9,14 @@ from gen_eval.schemas import GenerationSample
 
 
 def load_manifest(path: str | Path) -> list[GenerationSample]:
+    """把不同格式的 manifest 数据加载并转换成统一的 GenerationSample 列表"""
     payload = load_manifest_payload(path)
     samples_data = _extract_samples(payload)
     return [GenerationSample.from_dict(item) for item in samples_data]
 
 
 def load_manifest_payload(path: str | Path) -> Any:
+    """读取 manifest 文件内容，支持 JSON 格式，返回原始数据结构（列表或字典）"""
     manifest_path = Path(path)
     return json.loads(manifest_path.read_text(encoding="utf-8"))
 
@@ -63,6 +65,7 @@ def format_manifest_summary(manifest_path: str | Path) -> list[str]:
     first_sample = samples[0] if samples else None
     lines.append(f"first_sample_id: {first_sample.get('sample_id') if first_sample else None}")
 
+    # 初始化统计器
     generated_video_counts: Counter[str] = Counter()
     reference_video_counts: Counter[str] = Counter()
     camera_videos_presence = 0

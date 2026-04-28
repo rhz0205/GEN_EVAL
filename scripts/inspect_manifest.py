@@ -14,7 +14,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from gen_eval.dataset import format_manifest_summary
 
-
+# 在执行评估前，检查 manifest 是否可用
 def main() -> int:
     parser = argparse.ArgumentParser(description="Inspect a GEN_EVAL manifest.")
     parser.add_argument("--manifest", required=True, help="Path to manifest JSON file.")

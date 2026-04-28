@@ -35,13 +35,17 @@ def build_parser() -> argparse.ArgumentParser:
             "If omitted, a simple split is inferred from dataset_name when possible."
         ),
     )
-    parser.add_argument("--video-field", default="video", help="Field name for video path.")
-    parser.add_argument("--hdmap-field", default="hdmap", help="Field name for HD map path.")
+    parser.add_argument(
+        "--video-field", default="video", help="Field name for video path."
+    )
+    parser.add_argument(
+        "--hdmap-field", default="hdmap", help="Field name for HD map path."
+    )
     parser.add_argument(
         "--keys",
         default=None,
         help="Comma-separated top-level keys to include. Default: all keys.",
-    )
+    )  # 用于控制从 pkl 顶层类别中选哪些 key、每类保留多少、是否随机采样、是否全局采样
     parser.add_argument(
         "--limit-per-key",
         type=int,
@@ -88,9 +92,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not copy extra item fields into metadata['raw_item'].",
     )
     parser.add_argument(
-        "--detect-camera-videos",
-        action="store_true",
-        help="If item video path is a directory, detect camera videos inside it.",
+        "--no-detect-camera-videos",
+        dest="detect_camera_videos",
+        action="store_false",
+        default=True,
+        help="Disable camera video detection for directory video paths.",
     )
     parser.add_argument(
         "--primary-camera",

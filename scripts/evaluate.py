@@ -18,7 +18,6 @@ from gen_eval.result_summary import print_evaluation_summary
 from gen_eval.result_writer import (
     build_result_payload,
     get_command_string,
-    get_git_commit,
     save_result_bundle,
 )
 
@@ -33,21 +32,27 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # 1. 导入并解析配置文件
     resolved_config = resolve_run_config(args.config)
+    # 2. 执行评估并获取结果
     results = run_evaluation(resolved_config)
 
+    # 3. 构建结果负载，记录配置、指标输出和运行命令等信息
+    # TODO: 删除 git_commit 字段，并在对应 build_result_payload 删除 git_commit 参数
     payload = build_result_payload(
         resolved_config,
         results,
         command=get_command_string(),
-        git_commit=get_git_commit(),
     )
 
+    # 4. 保存结果到指定目录，并获取输出路径
     output_paths = save_result_bundle(
         payload=payload,
         output_dir=str(resolved_config.get("output_dir") or "outputs"),
         explicit_output=args.output,
     )
+
+    # 5. 打印评估摘要信息
     print_evaluation_summary(payload, output_paths["result_path"])
     return 0
 
