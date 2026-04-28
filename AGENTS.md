@@ -1,18 +1,18 @@
 GEN_EVAL project rules:
 
-GEN_EVAL is a lightweight, manifest-driven, offline evaluation toolkit for multi-view autonomous-driving generated videos. It is adapted from WorldLens generation metrics, but it must not revert to WorldLens-style engineering.
+GEN_EVAL is a lightweight, manifest-driven, offline evaluation toolkit for multi-view autonomous-driving generated videos. It should stay practical and flat, and must not drift back into WorldLens-style engineering.
 
 Hard constraints:
-- Do not revert to WorldLens-style `method_name/generated_results/video_submission/__call__` APIs.
+- Do not reintroduce WorldLens-style `method_name/generated_results/video_submission/__call__` APIs.
 - Do not use `worldbench.utils.common` or `video_relative` in `src/gen_eval`.
-- Do not use `git clone`, `wget`, or online downloads.
+- Do not use online downloads such as `git clone`, `wget`, or model fetch scripts.
 - Do not install packages.
 - Do not modify `pretrained_models` content.
-- Do not run 1k or full-scale evaluations unless explicitly requested.
+- Do not run full-scale evaluations unless explicitly requested.
 - Metrics must expose `evaluate(samples) -> dict`.
 - Inputs must be manifest-driven.
 - Model paths must be local and configurable.
-- If a dependency, model, or path is missing, return skipped/failed instead of crashing the whole evaluation.
+- If a dependency, model, or local path is missing, return skipped/failed instead of crashing the whole evaluation.
 
 Current canonical dataset groups:
 - `sample_data`
@@ -39,16 +39,14 @@ configs/
   runs/
 
 manifests/
-  sample.json
-  geely.json
-  cosmos.json
-  real.json
 
 outputs/
   sample_data/
   geely_data/
   cosmos_data/
   real_data/
+
+pretrained_models/
 
 scripts/
   evaluate.py
@@ -58,34 +56,51 @@ scripts/
 
 src/gen_eval/
   __init__.py
-  schemas.py
+  config.py
   dataset.py
   evaluator.py
+  manifest_builder.py
   registry.py
+  result_summary.py
   result_writer.py
+  schemas.py
   metrics/
-
-src/third_party/
-  video_depth_anything/
+  models/
+  third_party/
 ```
 
-Minimal core package responsibilities:
-- `schemas.py`: sample schema
-- `dataset.py`: manifest loading
-- `evaluator.py`: runs enabled metrics
-- `registry.py`: maps canonical metric names to metric classes
-- `result_writer.py`: writes result JSON
-- `metrics/`: metric implementations
+Package responsibilities:
+- `scripts/`: thin CLI entrypoints only
+- `src/gen_eval/config.py`: YAML loading and run-config resolution
+- `src/gen_eval/dataset.py`: manifest loading and lightweight manifest inspection helpers
+- `src/gen_eval/evaluator.py`: runs enabled metrics
+- `src/gen_eval/manifest_builder.py`: reusable manifest generation helpers
+- `src/gen_eval/registry.py`: maps canonical metric names to metric classes
+- `src/gen_eval/result_summary.py`: reusable result summary formatting
+- `src/gen_eval/result_writer.py`: result JSON writing and output path helpers
+- `src/gen_eval/schemas.py`: sample schema
+- `src/gen_eval/metrics/`: metric implementations
+- `src/gen_eval/models/`: lightweight model adapters used by metrics
+- `src/gen_eval/third_party/`: vendored third-party source code only
+- `pretrained_models/`: local pretrained weights and checkpoints
 
-Keep metric-specific loading logic inside each metric file:
+Boundary rules:
+- Do not place model weights under `src/gen_eval/models/`.
+- Do not place checkpoints under `src/gen_eval/third_party/`.
+- Keep files like `.pth`, `.ckpt`, `.bin`, `.onnx`, and `.safetensors` under `pretrained_models/` or another explicit non-source local path.
+- Keep metric-specific loading logic inside each metric module unless there is a clear need for a tiny reusable adapter.
+
+Keep metric-specific logic local when practical:
 - LoFTR logic inside `view_consistency.py`
 - CLIP logic inside `temporal_consistency.py`
 - DINO logic inside `appearance_consistency.py`
 - Video-Depth-Anything / DINOv2 logic inside `depth_consistency.py`
 
-Do not create or expand extra package layers unless explicitly requested:
-- Do not create `src/gen_eval/models/`.
-- Do not expand `src/gen_eval/utils/` unless absolutely required by existing imports.
+Keep the project lightweight:
+- Do not introduce deep package layering unless explicitly requested.
+- Do not create a `backbone/` directory.
+- Do not expand `src/gen_eval/utils/` into a large helper tree.
+- Prefer small reusable functions over framework-like abstractions.
 
 Config rules:
 
@@ -134,28 +149,18 @@ Naming rules:
 - run names must not use `_all`
 - output naming is `outputs/{dataset_group}/{run_name}`
 
-Examples:
-- `manifests/sample.json`
-- `configs/runs/sample.yaml`
-- `configs/runs/sample_view.yaml`
-- `outputs/sample_data/sample`
-- `outputs/geely_data/geely`
-
 Dependency-checking scope rules:
 
-Codex should only inspect dependencies between existing project files and packages inside this repository.
-
-Focus on:
+Codex should focus on repository-internal correctness:
 - whether `src/gen_eval` modules import each other correctly
 - whether canonical metric modules are referenced correctly
 - whether registry mappings are consistent
 - whether config metric keys match registered metric names
 - whether scripts import project modules correctly
-- whether old metric names only remain as backward-compatible aliases
 
-Codex must not treat missing local runtime dependencies as project errors. In this local workspace, the full evaluation environment is not configured.
+Codex must not treat missing local runtime dependencies as project errors unless they are caused by project imports.
 
-Do not report these as code problems unless they are directly caused by project imports:
+Do not report these as code problems by default:
 - missing `torch`
 - missing `torchvision`
 - missing `numpy`
@@ -177,22 +182,14 @@ Do not report these as code problems unless they are directly caused by project 
 - invalid local absolute weight paths
 - unavailable `pretrained_models` content
 
-Do not:
-- install packages
-- download weights
-- run environment-dependent metric execution
-- run long evaluations
-- modify `pretrained_models`
-- modify weight paths just because they are placeholders
-
 Allowed checks:
-- static import/path checks within the project where optional external dependencies are not required
+- static import/path checks within the project
 - YAML config syntax validation
 - registry key validation
 - file existence checks for project files only
-- `grep` or `rg` checks for old names, deprecated imports, and WorldLens-style APIs
+- grep/rg checks for old names, deprecated imports, and WorldLens-style APIs
 
-If an import check fails because of an optional external package, classify it as:
+If an import or execution check fails because of an optional external package, classify it as:
 - `environment/runtime dependency not available in local workspace`
 
 When reporting validation results, separate:

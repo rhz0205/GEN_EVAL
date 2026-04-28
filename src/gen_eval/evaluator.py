@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from gen_eval.config import load_yaml
 from gen_eval.dataset import load_manifest
 from gen_eval.metrics import register_builtin_metrics
 from gen_eval.registry import registry
@@ -47,16 +48,7 @@ def _load_config(path: Path) -> dict[str, Any]:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        try:
-            import yaml  # type: ignore
-        except ImportError as exc:
-            raise ValueError(
-                "Config must be JSON or JSON-compatible YAML when PyYAML is unavailable."
-            ) from exc
-        data = yaml.safe_load(text)
-        if not isinstance(data, dict):
-            raise ValueError("Config root must be a mapping.")
-        return data
+        return load_yaml(path)
 
 
 def _iter_enabled_metrics(metrics_config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
