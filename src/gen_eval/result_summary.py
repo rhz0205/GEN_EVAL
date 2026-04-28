@@ -90,7 +90,9 @@ def summarize_view_data(evaluated_samples: list[dict[str, Any]]) -> list[str]:
 
     lines: list[str] = []
     if num_views_counter:
-        items = ", ".join(f"{key}:{value}" for key, value in sorted(num_views_counter.items()))
+        items = ", ".join(
+            f"{key}:{value}" for key, value in sorted(num_views_counter.items())
+        )
         lines.append(f"  num_views_distribution: {items}")
     if per_view_scores:
         lines.append("  per_view_mean_score:")
@@ -99,7 +101,9 @@ def summarize_view_data(evaluated_samples: list[dict[str, Any]]) -> list[str]:
                 f"    {view_name}: {_format_number(_safe_mean(per_view_scores[view_name]))}"
             )
     if avg_l2_distances:
-        lines.append(f"  mean_avg_l2_distance: {_format_number(_safe_mean(avg_l2_distances))}")
+        lines.append(
+            f"  mean_avg_l2_distance: {_format_number(_safe_mean(avg_l2_distances))}"
+        )
     return lines
 
 
@@ -136,12 +140,16 @@ def summarize_pair_data(evaluated_samples: list[dict[str, Any]]) -> list[str]:
 
     lines: list[str] = []
     if pair_status_counts:
-        items = ", ".join(f"{key}:{value}" for key, value in sorted(pair_status_counts.items()))
+        items = ", ".join(
+            f"{key}:{value}" for key, value in sorted(pair_status_counts.items())
+        )
         lines.append(f"  pair_status_counts: {items}")
     if pair_scores:
         lines.append("  per_pair_mean_score:")
         for pair_name in sorted(pair_scores):
-            lines.append(f"    {pair_name}: {_format_number(_safe_mean(pair_scores[pair_name]))}")
+            lines.append(
+                f"    {pair_name}: {_format_number(_safe_mean(pair_scores[pair_name]))}"
+            )
     if pair_valid_matches:
         lines.append("  per_pair_mean_valid_matches:")
         for pair_name in sorted(pair_valid_matches):
@@ -167,7 +175,9 @@ def summarize_metric(metric_result: dict[str, Any]) -> list[str]:
     details = details if isinstance(details, dict) else {}
 
     evaluated_samples = [
-        item for item in _get_list(details, "evaluated_samples") if isinstance(item, dict)
+        item
+        for item in _get_list(details, "evaluated_samples")
+        if isinstance(item, dict)
     ]
     skipped_samples = _get_list(details, "skipped_samples")
     failed_samples = _get_list(details, "failed_samples")
@@ -184,7 +194,9 @@ def summarize_metric(metric_result: dict[str, Any]) -> list[str]:
     return lines
 
 
-def format_result_summary(payload: dict[str, Any], result_path: str | Path) -> list[str]:
+def format_result_summary(
+    payload: dict[str, Any], result_path: str | Path
+) -> list[str]:
     run = _get_run_section(payload)
     manifest = _get_manifest_section(payload)
     config = _get_config_section(payload)
@@ -212,10 +224,18 @@ def format_result_summary(payload: dict[str, Any], result_path: str | Path) -> l
 
     runtime = payload.get("runtime")
     if isinstance(runtime, dict):
-        if runtime.get("backend") is not None:
-            lines.append(f"runtime.backend: {runtime.get('backend')}")
-        if runtime.get("device") is not None:
-            lines.append(f"runtime.device: {runtime.get('device')}")
+        runtime_keys = [
+            "backend",
+            "device",
+            "ray_address",
+            "shard_size",
+            "max_in_flight",
+            "num_gpus_per_task",
+            "num_cpus_per_task",
+        ]
+        for key in runtime_keys:
+            if runtime.get(key) is not None:
+                lines.append(f"runtime.{key}: {runtime.get(key)}")
 
     metric_results = get_metric_results(payload)
     lines.append(f"num_metric_results: {len(metric_results)}")

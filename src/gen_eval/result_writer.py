@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -51,7 +50,6 @@ def resolve_output_paths(
             "timestamp_dir": run_dir,
             "result_path": result_path,
             "summary_path": run_dir / "summary.txt",
-            "latest_path": run_dir / "latest.txt",
         }
 
     run_dir = Path(output_dir)
@@ -62,7 +60,6 @@ def resolve_output_paths(
         "timestamp_dir": timestamp_dir,
         "result_path": timestamp_dir / "result.json",
         "summary_path": timestamp_dir / "summary.txt",
-        "latest_path": run_dir / "latest.txt",
     }
 
 
@@ -70,27 +67,11 @@ def get_command_string() -> str:
     return " ".join(sys.argv)
 
 
-def get_git_commit() -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except Exception:
-        return None
-
-    commit = result.stdout.strip()
-    return commit or None
-
-
 def build_result_payload(
     resolved_config: dict[str, Any],
     evaluation_result: dict[str, Any],
     *,
     command: str | None = None,
-    git_commit: str | None = None,
     created_at: datetime | None = None,
 ) -> dict[str, Any]:
     created_time = created_at or datetime.now()
@@ -106,7 +87,6 @@ def build_result_payload(
             "created_at": created_time.isoformat(timespec="seconds"),
             "timestamp": timestamp,
             "command": command,
-            "git_commit": git_commit,
         },
         "runtime": resolved_config.get("runtime", {}),
         "manifest": {
@@ -148,5 +128,4 @@ def save_result_bundle(
         "\n".join(summary_lines) + "\n",
         encoding="utf-8",
     )
-    output_paths["latest_path"].write_text(f"{timestamp}\n", encoding="utf-8")
     return output_paths
