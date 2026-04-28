@@ -178,7 +178,7 @@ class DepthConsistencyMetric:
             status = sample_result.get("status")
             score = sample_result.get("score")
 
-            if status == "ok" and isinstance(score, (int, float)) and math.isfinite(float(score)):
+            if status == "success" and isinstance(score, (int, float)) and math.isfinite(float(score)):
                 valid_scores.append(float(score))
             elif status == "skipped":
                 skipped_samples.append(
@@ -197,7 +197,7 @@ class DepthConsistencyMetric:
 
         if valid_scores:
             final_score = float(sum(valid_scores) / len(valid_scores))
-            status = "ok"
+            status = "success"
             reason = None
         else:
             final_score = None
@@ -244,7 +244,7 @@ class DepthConsistencyMetric:
 
         video_result = self._evaluate_single_video(str(video_path), sample_id=sample_id, view_name=None)
 
-        if video_result.get("status") != "ok":
+        if video_result.get("status") != "success":
             return {
                 "sample_id": sample_id,
                 "metric": self.name,
@@ -262,7 +262,7 @@ class DepthConsistencyMetric:
             "metric": self.name,
             "mode": "self",
             "score": score,
-            "status": "ok",
+            "status": "success",
             "video_path": str(video_path),
             "video_result": video_result,
         }
@@ -294,7 +294,7 @@ class DepthConsistencyMetric:
             result = self._evaluate_single_video(str(path), sample_id=sample_id, view_name=view)
             view_results[view] = result
 
-            if result.get("status") == "ok":
+            if result.get("status") == "success":
                 score = self._select_score(result)
                 raw_l2 = result.get("avg_l2_distance")
                 if math.isfinite(score):
@@ -321,7 +321,7 @@ class DepthConsistencyMetric:
             "metric": self.name,
             "mode": "self",
             "score": score,
-            "status": "ok",
+            "status": "success",
             "num_views": len(view_scores),
             "avg_l2_distance": avg_l2,
             "view_results": view_results,
@@ -405,7 +405,7 @@ class DepthConsistencyMetric:
 
         return {
             "video_path": video_path,
-            "status": "ok",
+            "status": "success",
             "score": consistency_score,
             "depth_consistency_score": consistency_score,
             "avg_l2_distance": float(avg_l2),

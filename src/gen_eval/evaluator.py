@@ -103,5 +103,8 @@ def normalize_metric_result(metric_name: str, result: Any) -> dict[str, Any]:
     normalized["details"] = details if isinstance(details, dict) else {}
 
     status = normalized.get("status")
-    normalized["status"] = str(status) if status is not None else "failed"
+    normalized_status = str(status) if status is not None else "failed"
+    if normalized_status == "ok":
+        normalized_status = "success"
+    normalized["status"] = normalized_status
     return normalized

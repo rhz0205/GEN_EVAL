@@ -119,7 +119,7 @@ class TemporalConsistencyMetric:
             status = sample_result.get("status")
             score = sample_result.get("score")
 
-            if status == "ok" and isinstance(score, (int, float)) and math.isfinite(float(score)):
+            if status == "success" and isinstance(score, (int, float)) and math.isfinite(float(score)):
                 valid_scores.append(float(score))
             elif status == "skipped":
                 skipped_samples.append(
@@ -138,7 +138,7 @@ class TemporalConsistencyMetric:
 
         if valid_scores:
             final_score = float(sum(valid_scores) / len(valid_scores))
-            status = "ok"
+            status = "success"
             reason = None
         else:
             final_score = None
@@ -185,7 +185,7 @@ class TemporalConsistencyMetric:
 
         video_result = self._evaluate_single_video(str(video_path))
 
-        if video_result.get("status") != "ok":
+        if video_result.get("status") != "success":
             return {
                 "sample_id": sample_id,
                 "metric": self.name,
@@ -203,7 +203,7 @@ class TemporalConsistencyMetric:
             "metric": self.name,
             "mode": "self",
             "score": score,
-            "status": "ok",
+            "status": "success",
             "video_path": str(video_path),
             "video_result": video_result,
         }
@@ -235,7 +235,7 @@ class TemporalConsistencyMetric:
             view_results[view] = result
 
             if (
-                result.get("status") == "ok"
+                result.get("status") == "success"
                 and isinstance(result.get(self.score_key, result.get("ts")), (int, float))
             ):
                 score = float(result.get(self.score_key, result.get("ts")))
@@ -260,7 +260,7 @@ class TemporalConsistencyMetric:
             "metric": self.name,
             "mode": "self",
             "score": score,
-            "status": "ok",
+            "status": "success",
             "num_views": len(view_scores),
             "view_results": view_results,
         }
@@ -327,7 +327,7 @@ class TemporalConsistencyMetric:
 
         result = {
             "video_path": video_path,
-            "status": "ok",
+            "status": "success",
             "score": metrics["ts"],
             "acm": metrics["acm"],
             "video_sim": metrics["video_sim"],

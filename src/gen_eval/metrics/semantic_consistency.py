@@ -130,7 +130,7 @@ class SemanticConsistencyMetric:
                 "skipped_samples": skipped_samples,
                 "failed_samples": failed_samples,
             },
-            status="ok",
+            status="success",
             reason=None,
         )
 

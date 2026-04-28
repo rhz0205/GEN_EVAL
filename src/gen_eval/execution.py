@@ -169,7 +169,7 @@ def _merge_metric_results(
         )
 
         if (
-            status == "ok"
+            status == "success"
             and isinstance(score, (int, float))
             and math.isfinite(float(score))
         ):
@@ -202,7 +202,7 @@ def _merge_metric_results(
             if total_weight > 0
             else sum(valid_scores) / len(valid_scores)
         )
-        status = "ok"
+        status = "success"
         reason = None
         num_valid_samples = total_weight if total_weight > 0 else len(valid_scores)
     else:
