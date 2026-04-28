@@ -96,7 +96,6 @@ def normalize_metric_result(metric_name: str, result: Any) -> dict[str, Any]:
 
     normalized = dict(result)
     normalized.setdefault("metric", metric_name)
-    normalized.setdefault("score", None)
     normalized.setdefault("num_samples", 0)
 
     details = normalized.get("details")

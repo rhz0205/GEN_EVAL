@@ -48,9 +48,11 @@ def register_builtin_metrics() -> None:
     from .instance_consistency import InstanceConsistencyMetric
     from .semantic_consistency import SemanticConsistencyMetric
     from .temporal_consistency import TemporalConsistencyMetric
+    from .video_integrity import VideoIntegrityMetric
     from .view_consistency import ViewConsistencyMetric
 
     metric_classes = [
+        VideoIntegrityMetric,
         ViewConsistencyMetric,
         TemporalConsistencyMetric,
         AppearanceConsistencyMetric,

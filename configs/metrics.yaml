@@ -1,15 +1,17 @@
+video_integrity:
+  enabled: true
+  camera_videos_key: camera_videos
+  frame_count_tolerance: 0.05
+  fps_tolerance: 0.05
+  duration_tolerance: 0.05
+
 view_consistency:
   enabled: true
   repo_path: /ABS/PATH/TO/LoFTR
   weight_path: /ABS/PATH/TO/loftr.ckpt
-  num_frames: 3
   resize:
     - 640
     - 480
-  crop_ratio: 1.0
-  conf_threshold: 0.0
-  target_matches: 200
-  save_visualizations: false
 
 temporal_consistency:
   enabled: true

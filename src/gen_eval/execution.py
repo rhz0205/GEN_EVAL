@@ -148,6 +148,14 @@ def _merge_metric_results(
     partial_results: list[dict[str, Any]],
     total_samples: int,
 ) -> dict[str, Any]:
+    scoreless_result = _merge_scoreless_metric_results(
+        metric_name,
+        partial_results,
+        total_samples,
+    )
+    if scoreless_result is not None:
+        return scoreless_result
+
     valid_scores: list[float] = []
     valid_weights: list[int] = []
     failed = 0
@@ -239,6 +247,149 @@ def _merge_metric_results(
         result["details"]["failed_samples"] = []
     result["details"]["total_samples_seen"] = total_samples
     return result
+
+
+def _merge_scoreless_metric_results(
+    metric_name: str,
+    partial_results: list[dict[str, Any]],
+    total_samples: int,
+) -> dict[str, Any] | None:
+    if metric_name == "video_integrity":
+        return _merge_video_integrity_results(partial_results, total_samples)
+    if metric_name == "view_consistency":
+        return _merge_view_consistency_results(partial_results, total_samples)
+    return None
+
+
+def _merge_video_integrity_results(
+    partial_results: list[dict[str, Any]],
+    total_samples: int,
+) -> dict[str, Any]:
+    normalized_partials = [
+        normalize_metric_result("video_integrity", partial) for partial in partial_results
+    ]
+    details = _merge_detail_lists(normalized_partials, total_samples)
+    valid_sample_count = sum(
+        int(partial.get("valid_sample_count") or 0) for partial in normalized_partials
+    )
+    invalid_sample_count = sum(
+        int(partial.get("invalid_sample_count") or 0) for partial in normalized_partials
+    )
+    evaluated_count = valid_sample_count + invalid_sample_count
+    failed = sum(1 for partial in normalized_partials if partial.get("status") == "failed")
+    reasons = [
+        partial.get("reason")
+        for partial in normalized_partials
+        if isinstance(partial.get("reason"), str) and partial.get("reason")
+    ]
+
+    if evaluated_count > 0:
+        status = "success"
+        reason = None
+    else:
+        status = "failed" if failed else "skipped"
+        reason = (
+            reasons[0]
+            if reasons
+            else "No sample could be evaluated for video integrity."
+        )
+
+    result: dict[str, Any] = {
+        "metric": "video_integrity",
+        "status": status,
+        "num_samples": total_samples,
+        "valid_sample_count": valid_sample_count,
+        "invalid_sample_count": invalid_sample_count,
+        "pass_rate": (
+            valid_sample_count / evaluated_count if evaluated_count > 0 else None
+        ),
+        "details": details,
+    }
+    if reason:
+        result["reason"] = reason
+    return result
+
+
+def _merge_view_consistency_results(
+    partial_results: list[dict[str, Any]],
+    total_samples: int,
+) -> dict[str, Any]:
+    normalized_partials = [
+        normalize_metric_result("view_consistency", partial) for partial in partial_results
+    ]
+    details = _merge_detail_lists(normalized_partials, total_samples)
+    failed = sum(1 for partial in normalized_partials if partial.get("status") == "failed")
+    reasons = [
+        partial.get("reason")
+        for partial in normalized_partials
+        if isinstance(partial.get("reason"), str) and partial.get("reason")
+    ]
+
+    weighted_sum = 0.0
+    valid_evaluated_count = 0
+    for partial in normalized_partials:
+        if partial.get("status") != "success":
+            continue
+        score = partial.get("view_consistency_score")
+        count = partial.get("valid_evaluated_count")
+        if (
+            isinstance(score, (int, float))
+            and math.isfinite(float(score))
+            and isinstance(count, int)
+            and count > 0
+        ):
+            weighted_sum += float(score) * count
+            valid_evaluated_count += count
+
+    if valid_evaluated_count > 0:
+        status = "success"
+        reason = None
+        view_consistency_score = weighted_sum / valid_evaluated_count
+    else:
+        status = "failed" if failed else "skipped"
+        reason = (
+            reasons[0]
+            if reasons
+            else "No sample produced a valid view_consistency_score."
+        )
+        view_consistency_score = None
+
+    result: dict[str, Any] = {
+        "metric": "view_consistency",
+        "status": status,
+        "num_samples": total_samples,
+        "valid_evaluated_count": valid_evaluated_count,
+        "view_consistency_score": view_consistency_score,
+        "details": details,
+    }
+    if reason:
+        result["reason"] = reason
+    return result
+
+
+def _merge_detail_lists(
+    partial_results: list[dict[str, Any]],
+    total_samples: int,
+) -> dict[str, Any]:
+    merged_details: dict[str, list[Any]] = defaultdict(list)
+    for partial in partial_results:
+        details = partial.get("details")
+        if not isinstance(details, dict):
+            continue
+        for key in ("evaluated_samples", "skipped_samples", "failed_samples"):
+            value = details.get(key)
+            if isinstance(value, list):
+                merged_details[key].extend(value)
+
+    detail_payload: dict[str, Any] = dict(merged_details)
+    if "evaluated_samples" not in detail_payload:
+        detail_payload["evaluated_samples"] = []
+    if "skipped_samples" not in detail_payload:
+        detail_payload["skipped_samples"] = []
+    if "failed_samples" not in detail_payload:
+        detail_payload["failed_samples"] = []
+    detail_payload["total_samples_seen"] = total_samples
+    return detail_payload
 
 
 def _coerce_positive_int(value: Any) -> int | None:
