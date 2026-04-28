@@ -1,19 +1,4 @@
-"""Depth consistency metric for GEN_EVAL.
-
-This implementation provides a reference-free depth temporal consistency metric
-for generated driving videos.
-
-Core idea
----------
-1. Use a local Video-Depth-Anything model to estimate depth for sampled frames.
-2. Render depth maps into RGB depth frames using an inferno colormap.
-3. Use local DINOv2 to extract features from rendered depth frames.
-4. Compute adjacent-frame feature L2 distance as depth temporal inconsistency.
-5. Convert the distance into a high-is-better consistency score.
-
-This file is manifest-driven and does not depend on WorldLens result folders.
-It does not download models or data. All model paths must be local.
-"""
+"""Depth-based temporal consistency metric."""
 
 from __future__ import annotations
 
@@ -23,7 +8,7 @@ import math
 import os
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 MODEL_CONFIGS = {
     "vits": {
@@ -39,11 +24,11 @@ MODEL_CONFIGS = {
 }
 
 class DepthConsistencyMetric:
-    """Reference-free depth temporal consistency metric."""
+    """Measure temporal consistency from estimated depth dynamics."""
 
     name = "depth_consistency"
 
-    def __init__(self, config: Optional[dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config = config or {}
 
         # Current recommended mode.
@@ -54,7 +39,7 @@ class DepthConsistencyMetric:
 
         # Video-Depth-Anything settings.
         self.encoder = self.config.get("encoder", "vits")
-        self.pretrained_model_path = (
+        self.weight_path = (
             self.config.get("weight_path")
             or self.config.get("pretrained_model_path")
             or self.config.get("depth_model_dir")
@@ -67,11 +52,11 @@ class DepthConsistencyMetric:
 
         # Path that makes the import below available.
         # Example: /di/group/renhongze/GEN_EVAL/src
-        # so that import third_party.video_depth_anything.video_depth works.
-        self.video_depth_repo_path = self.config.get("repo_path") or self.config.get("video_depth_repo_path")
+        # so that import gen_eval.third_party.video_depth_anything.video_depth works.
+        self.repo_path = self.config.get("repo_path") or self.config.get("video_depth_repo_path")
         self.video_depth_module = self.config.get(
             "video_depth_module",
-            "third_party.video_depth_anything.video_depth",
+            "gen_eval.third_party.video_depth_anything.video_depth",
         )
         self.video_depth_class = self.config.get("video_depth_class", "VideoDepthAnything")
 
@@ -83,14 +68,14 @@ class DepthConsistencyMetric:
         self.silence_depth_stdout = bool(self.config.get("silence_depth_stdout", True))
 
         # DINOv2 settings.
-        self.dinov2_model_path = (
+        self.model_path = (
             self.config.get("model_path")
             or self.config.get("dinov2_model_path")
             or self.config.get("dino_model_path")
             or self.config.get("dino_path")
             or "pretrained_models/dinov2"
         )
-        self.dino_batch_size = int(self.config.get("batch_size", self.config.get("dino_batch_size", 16)))
+        self.batch_size = int(self.config.get("batch_size", self.config.get("dino_batch_size", 16)))
 
         # Frame sampling.
         self.num_frames = int(self.config.get("num_frames", 8))
@@ -134,13 +119,9 @@ class DepthConsistencyMetric:
         self._dino_processor = None
         self._dino_model = None
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def evaluate(self, samples: list[Any]) -> dict[str, Any]:
         """Evaluate depth consistency over manifest samples."""
-        details: list[dict[str, Any]] = []
+        evaluated_samples: list[dict[str, Any]] = []
         valid_scores: list[float] = []
         skipped_samples: list[dict[str, Any]] = []
         failed_samples: list[dict[str, Any]] = []
@@ -192,7 +173,7 @@ class DepthConsistencyMetric:
                     "reason": f"{type(exc).__name__}: {exc}",
                 }
 
-            details.append(sample_result)
+            evaluated_samples.append(sample_result)
 
             status = sample_result.get("status")
             score = sample_result.get("score")
@@ -228,7 +209,7 @@ class DepthConsistencyMetric:
             "score": final_score,
             "num_samples": len(valid_scores),
             "details": {
-                "evaluated_samples": details,
+                "evaluated_samples": evaluated_samples,
                 "skipped_samples": skipped_samples,
                 "failed_samples": failed_samples,
             },
@@ -437,7 +418,7 @@ class DepthConsistencyMetric:
     # Runtime initialization
     # ------------------------------------------------------------------
 
-    def _ensure_runtime(self) -> Optional[str]:
+    def _ensure_runtime(self) -> str | None:
         torch_status = self._ensure_torch()
         if torch_status is not None:
             return torch_status
@@ -452,7 +433,7 @@ class DepthConsistencyMetric:
 
         return None
 
-    def _ensure_torch(self) -> Optional[str]:
+    def _ensure_torch(self) -> str | None:
         if self._torch is not None:
             return None
 
@@ -468,15 +449,15 @@ class DepthConsistencyMetric:
 
         return None
 
-    def _ensure_depth_engine(self) -> Optional[str]:
+    def _ensure_depth_engine(self) -> str | None:
         if self._depth_engine is not None:
             return None
 
         if self.encoder not in MODEL_CONFIGS:
             return f"Unsupported depth encoder: {self.encoder}. Expected one of {sorted(MODEL_CONFIGS)}."
 
-        if self.video_depth_repo_path:
-            repo_path = str(Path(self.video_depth_repo_path).expanduser().resolve())
+        if self.repo_path:
+            repo_path = str(Path(self.repo_path).expanduser().resolve())
             if repo_path not in sys.path:
                 sys.path.insert(0, repo_path)
 
@@ -495,7 +476,7 @@ class DepthConsistencyMetric:
             ckpt_path = Path(str(self.depth_checkpoint_path)).expanduser().resolve()
         else:
             ckpt_path = (
-                Path(str(self.pretrained_model_path)).expanduser().resolve()
+                Path(str(self.weight_path)).expanduser().resolve()
                 / f"metric_video_depth_anything_{self.encoder}.pth"
             )
 
@@ -514,11 +495,11 @@ class DepthConsistencyMetric:
             self._depth_engine = None
             return f"Failed to load VideoDepthAnything: {type(exc).__name__}: {exc}"
 
-    def _ensure_dinov2(self) -> Optional[str]:
+    def _ensure_dinov2(self) -> str | None:
         if self._dino_model is not None and self._dino_processor is not None:
             return None
 
-        model_path = Path(str(self.dinov2_model_path)).expanduser().resolve()
+        model_path = Path(str(self.model_path)).expanduser().resolve()
         if not model_path.exists():
             return f"DINOv2 local model path not found: {model_path}"
 
@@ -627,8 +608,8 @@ class DepthConsistencyMetric:
         imgs = [pil_image.fromarray(frame).convert("RGB") for frame in depth_frames_rgb]
         all_feats = []
 
-        for start in range(0, len(imgs), self.dino_batch_size):
-            batch = imgs[start : start + self.dino_batch_size]
+        for start in range(0, len(imgs), self.batch_size):
+            batch = imgs[start : start + self.batch_size]
             inputs = self._dino_processor(images=batch, return_tensors="pt")
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
@@ -803,7 +784,7 @@ class DepthConsistencyMetric:
         self._pil_image = Image
         return Image
 
-# Backward-compatible aliases.
+# Legacy aliases kept for compatibility with older imports.
 DepthConsistency = DepthConsistencyMetric
 DEPTH_CONSISTENCY = DepthConsistencyMetric
 

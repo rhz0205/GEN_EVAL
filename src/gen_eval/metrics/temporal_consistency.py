@@ -1,39 +1,17 @@
-"""Temporal consistency metric for GEN_EVAL.
-
-This implementation provides a reference-free / self-consistency mode for
-generated videos.
-
-The metric uses CLIP image embeddings extracted from sampled video frames and
-computes:
-
-- ACM: Adjacent-frame Cosine similarity Mean.
-  Higher means adjacent frames are more visually/semantically consistent.
-
-- TJI: Temporal Jerkiness Index in CLIP feature space.
-  Higher means the feature trajectory has stronger abrupt second-order change.
-
-- TJI score: exp(-0.5 * TJI).
-  Higher means smoother temporal evolution.
-
-- TS: Temporal self-consistency score.
-  TS = ACM / (1 + TJI)
-
-This file is manifest-driven and does not depend on WorldLens directory
-conventions, WorldLens utils, or online model downloads.
-"""
+"""CLIP-based temporal consistency metric."""
 
 from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 class TemporalConsistencyMetric:
-    """Reference-free temporal consistency metric."""
+    """Measure frame-to-frame temporal stability from sampled embeddings."""
 
     name = "temporal_consistency"
 
-    def __init__(self, config: Optional[dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config = config or {}
 
         # Current recommended mode for your data.
@@ -42,7 +20,7 @@ class TemporalConsistencyMetric:
 
         # Runtime / model settings.
         self.device = self.config.get("device", "cuda")
-        self.clip_weight_path = (
+        self.weight_path = (
             self.config.get("weight_path")
             or self.config.get("clip_weight_path")
             or self.config.get("local_save_path")
@@ -82,13 +60,9 @@ class TemporalConsistencyMetric:
         self._clip_model = None
         self._preprocess = None
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def evaluate(self, samples: list[Any]) -> dict[str, Any]:
         """Evaluate temporal consistency over manifest samples."""
-        details: list[dict[str, Any]] = []
+        evaluated_samples: list[dict[str, Any]] = []
         valid_scores: list[float] = []
         skipped_samples: list[dict[str, Any]] = []
         failed_samples: list[dict[str, Any]] = []
@@ -140,7 +114,7 @@ class TemporalConsistencyMetric:
                     "reason": f"{type(exc).__name__}: {exc}",
                 }
 
-            details.append(sample_result)
+            evaluated_samples.append(sample_result)
 
             status = sample_result.get("status")
             score = sample_result.get("score")
@@ -176,7 +150,7 @@ class TemporalConsistencyMetric:
             "score": final_score,
             "num_samples": len(valid_scores),
             "details": {
-                "evaluated_samples": details,
+                "evaluated_samples": evaluated_samples,
                 "skipped_samples": skipped_samples,
                 "failed_samples": failed_samples,
             },
@@ -367,7 +341,7 @@ class TemporalConsistencyMetric:
         }
         return result
 
-    def _compute_temporal_metrics(self, features: Any) -> Optional[dict[str, Any]]:
+    def _compute_temporal_metrics(self, features: Any) -> dict[str, Any] | None:
         torch = self._torch
         if torch is None:
             raise RuntimeError("torch is not initialized")
@@ -418,7 +392,7 @@ class TemporalConsistencyMetric:
     # CLIP utilities
     # ------------------------------------------------------------------
 
-    def _ensure_clip(self) -> Optional[str]:
+    def _ensure_clip(self) -> str | None:
         """Initialize CLIP lazily.
 
         Returns None if ready, otherwise a reason string.
@@ -452,8 +426,8 @@ class TemporalConsistencyMetric:
 
         model_source = None
 
-        if self.clip_weight_path:
-            weight_path = Path(str(self.clip_weight_path)).expanduser().resolve()
+        if self.weight_path:
+            weight_path = Path(str(self.weight_path)).expanduser().resolve()
             if not weight_path.exists():
                 return f"CLIP weight path does not exist: {weight_path}"
             model_source = str(weight_path)
@@ -618,7 +592,7 @@ class TemporalConsistencyMetric:
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"cv2 is required for temporal_consistency: {exc}") from exc
 
-# Backward-compatible aliases.
+# Legacy aliases kept for compatibility with older imports.
 TemporalConsistency = TemporalConsistencyMetric
 TEMPORAL_CONSISTENCY = TemporalConsistencyMetric
 

@@ -9,6 +9,7 @@ Hard constraints:
 - Do not install packages.
 - Do not modify `pretrained_models` content.
 - Do not run full-scale evaluations unless explicitly requested.
+- Do not add `--dry-run` or similar check-only CLI modes unless explicitly requested.
 - Metrics must expose `evaluate(samples) -> dict`.
 - Inputs must be manifest-driven.
 - Model paths must be local and configurable.
@@ -96,6 +97,7 @@ Boundary rules:
 - Ray support must remain optional and must not become a hard dependency for local runs.
 - Runtime config should stay simple inside existing run configs.
 - Do not create separate Ray config files such as `sample_ray.yaml` unless explicitly requested.
+- Do not embed Ray cluster startup scripts or long Rancher/Volcano/Kubernetes YAML into GEN_EVAL core code.
 - Do not rewrite metric implementations just to support Ray execution.
 - Metric results should stay dict-like and stable across backends.
 - Preferred metric result keys are: `metric`, `score`, `num_samples`, `details`, `status`, and optional `reason`.
@@ -151,13 +153,13 @@ Run config inference rules:
 - `run_name` comes from the run config filename stem
 - `dataset_config_path` resolves to `configs/datasets/{dataset}.yaml`
 - `metric_config_path` is always `configs/metrics.yaml`
-- `output_dir` resolves to `outputs/{dataset}/{run_name}`
+- `output_dir` resolves to `outputs/{dataset_name}/{run_name}`
 - `save_details` defaults to `true`
 
 Naming rules:
 - manifest filenames under `manifests/` must not add `_manifest`
 - run names must not use `_all`
-- output naming is `outputs/{dataset_group}/{run_name}`
+- output naming is `outputs/{dataset_name}/{run_name}/{timestamp}`
 
 Dependency-checking scope rules:
 
@@ -169,6 +171,8 @@ Codex should focus on repository-internal correctness:
 - whether scripts import project modules correctly
 
 Codex must not treat missing local runtime dependencies as project errors unless they are caused by project imports.
+Codex must not assume the local workspace has real datasets, manifests, videos,
+pretrained weights, CUDA, or a running Ray cluster.
 
 Do not report these as code problems by default:
 - missing `torch`
@@ -208,3 +212,14 @@ When reporting validation results, separate:
 3. environment/runtime dependency limitations
 
 Do not propose environment setup unless explicitly asked.
+Prefer static validation and CLI help checks on the local machine. Treat real
+evaluation and cluster debugging as remote-environment tasks unless the user
+explicitly provides local data and asks to run them.
+
+Output rules:
+- Keep the default output layout lightweight and stable.
+- Default run output should use `outputs/{dataset_name}/{run_name}/{timestamp}/`.
+- Each run should write simple files such as `result.json` and `summary.txt`.
+- Keep a text-based `latest.txt` marker instead of symlinks.
+- Preserve no-data local checkability while keeping the output format simple.
+- Do not replace this with MLflow, W&B, databases, dashboards, or other heavy experiment managers unless explicitly requested.

@@ -1,39 +1,4 @@
-"""View consistency metric for GEN_EVAL.
-
-Supported modes
----------------
-1. video_integrity
-   Reference-free raw-video integrity check for multi-view generated videos.
-   It uses metadata["camera_videos"] and evaluates:
-   - whether expected camera videos exist
-   - whether videos are readable
-   - whether frame counts are consistent across views
-   - whether FPS values are consistent across views
-   - whether resolutions are consistent across views
-   - whether durations are consistent across views
-
-2. loftr
-   LoFTR-based cross-view consistency for synchronized adjacent camera pairs.
-   It follows the WorldLens-style idea:
-   - select adjacent camera pairs
-   - crop likely overlapping edge regions
-   - run LoFTR on synchronized sampled frames
-   - aggregate matching confidence and valid match count
-
-3. precomputed
-   Lightweight aggregation of precomputed cross-view evidence:
-   - metadata["cross_view_scores"]
-   - metadata["cross_view_confidence"]
-   - metadata["cross_view_matches"]
-   - metadata["cross_view_features"]
-
-4. auto
-   Prefer precomputed evidence; otherwise use LoFTR if configured; otherwise
-   fall back to video_integrity.
-
-This implementation is manifest-driven and does not depend on WorldLens
-directory conventions.
-"""
+"""Cross-view consistency metric for multi-camera video manifests."""
 
 from __future__ import annotations
 
@@ -57,7 +22,7 @@ class ViewConsistencyMetric:
 
     name = "view_consistency"
 
-    def __init__(self, config: dict[str, Any] | None = None):
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config = config or {}
 
         # Main mode:
@@ -153,13 +118,9 @@ class ViewConsistencyMetric:
         self._cv2 = None
         self._np = None
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def evaluate(self, samples: list[Any]) -> dict[str, Any]:
         """Evaluate cross-view consistency over samples."""
-        details: list[dict[str, Any]] = []
+        evaluated_samples: list[dict[str, Any]] = []
         valid_scores: list[float] = []
         skipped_samples: list[dict[str, Any]] = []
         failed_samples: list[dict[str, Any]] = []
@@ -168,18 +129,18 @@ class ViewConsistencyMetric:
             sample_id = getattr(sample, "sample_id", None) or "unknown"
 
             try:
-                sample_result = self._evaluate_one(sample)
+                sample_result = self._evaluate_sample(sample)
             except Exception as exc:  # noqa: BLE001
-                failed = {
+                failed_result = {
                     "sample_id": sample_id,
                     "status": "failed",
                     "reason": f"{type(exc).__name__}: {exc}",
                 }
-                details.append(failed)
-                failed_samples.append(failed)
+                evaluated_samples.append(failed_result)
+                failed_samples.append(failed_result)
                 continue
 
-            details.append(sample_result)
+            evaluated_samples.append(sample_result)
 
             status = sample_result.get("status")
             score = sample_result.get("score")
@@ -215,7 +176,7 @@ class ViewConsistencyMetric:
             "score": final_score,
             "num_samples": len(valid_scores),
             "details": {
-                "evaluated_samples": details,
+                "evaluated_samples": evaluated_samples,
                 "skipped_samples": skipped_samples,
                 "failed_samples": failed_samples,
             },
@@ -227,7 +188,7 @@ class ViewConsistencyMetric:
 
         return result
 
-    def _evaluate_one(self, sample: Any) -> dict[str, Any]:
+    def _evaluate_sample(self, sample: Any) -> dict[str, Any]:
         sample_id = getattr(sample, "sample_id", None) or "unknown"
         metadata = getattr(sample, "metadata", None) or {}
 
@@ -1431,6 +1392,7 @@ class ViewConsistencyMetric:
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"cv2 is required but unavailable: {exc}") from exc
 
+# Legacy alias kept for compatibility with older imports.
 ViewConsistency = ViewConsistencyMetric
 
 # -------------------------------------------------------------------------

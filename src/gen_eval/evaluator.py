@@ -12,6 +12,8 @@ from gen_eval.result_writer import write_results
 
 
 class Evaluator:
+    """Orchestrate manifest loading and metric execution."""
+
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
         register_builtin_metrics()
@@ -22,6 +24,7 @@ class Evaluator:
         return cls(_load_config(config_path))
 
     def run(self) -> dict[str, Any]:
+        """Run all enabled metrics against the configured manifest."""
         manifest_path = self.config["manifest_path"]
         samples = load_manifest(manifest_path)
 
@@ -50,6 +53,7 @@ def _load_config(path: Path) -> dict[str, Any]:
 
 
 def iter_enabled_metrics(metrics_config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Return enabled metric names and normalized metric configs."""
     enabled = []
     for metric_name, raw_config in metrics_config.items():
         metric_config = raw_config or {}
@@ -70,6 +74,7 @@ def run_metric(
 
 
 def normalize_metric_result(metric_name: str, result: Any) -> dict[str, Any]:
+    """Normalize metric outputs to the shared evaluator result contract."""
     if not isinstance(result, dict):
         raise TypeError(f"Metric '{metric_name}' must return a dict, got {type(result).__name__}.")
 

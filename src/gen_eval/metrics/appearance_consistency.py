@@ -1,49 +1,18 @@
-"""Subject consistency metric for GEN_EVAL.
-
-This implementation provides a reference-free / self-consistency mode for
-generated videos.
-
-Compared with temporal_consistency, this metric uses DINO image embeddings
-instead of CLIP embeddings. DINO features are generally more sensitive to
-visual structure, object appearance, texture, and local subject stability.
-
-The metric computes:
-
-- ACM: Adjacent-frame Cosine similarity Mean.
-  Higher means adjacent frames are more visually/structurally consistent.
-
-- TJI: Temporal Jerkiness Index in DINO feature space.
-  Higher means the feature trajectory has stronger abrupt second-order change.
-
-- TJI score: exp(-0.5 * TJI).
-  Higher means smoother temporal evolution.
-
-- TS: Temporal self-consistency score.
-  TS = ACM / (1 + TJI)
-
-- balanced_score:
-  0.5 * ACM + 0.5 * TJI_score
-
-The current recommended score_key is "balanced_score", because TS can be
-numerically conservative when TJI is large.
-
-This file is manifest-driven and does not depend on WorldLens directory
-conventions, WorldLens utils, or online model downloads.
-"""
+"""DINO-based appearance consistency metric."""
 
 from __future__ import annotations
 
 import math
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 class AppearanceConsistencyMetric:
-    """Reference-free DINO-based appearance consistency metric."""
+    """Measure frame-to-frame appearance stability from sampled embeddings."""
 
     name = "appearance_consistency"
 
-    def __init__(self, config: Optional[dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config = config or {}
 
         # Current recommended mode for your data.
@@ -56,7 +25,7 @@ class AppearanceConsistencyMetric:
         # DINO official repo path. It should point to the local dino repo root.
         # The repo root should support:
         # torch.hub.load(repo_or_dir, model_name, source="local", pretrained=False)
-        self.repo_or_dir = (
+        self.repo_path = (
             self.config.get("repo_path")
             or self.config.get("repo_or_dir")
             or self.config.get("dino_repo_path")
@@ -64,7 +33,7 @@ class AppearanceConsistencyMetric:
         )
 
         # DINO weight path, e.g. dino_vitbase16_pretrain.pth.
-        self.weights_path = (
+        self.weight_path = (
             self.config.get("weight_path")
             or self.config.get("weights_path")
             or self.config.get("dino_weight_path")
@@ -107,13 +76,9 @@ class AppearanceConsistencyMetric:
         self._dino_model = None
         self._transform = None
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def evaluate(self, samples: list[Any]) -> dict[str, Any]:
-        """Evaluate subject consistency over manifest samples."""
-        details: list[dict[str, Any]] = []
+        """Evaluate appearance consistency across manifest samples."""
+        evaluated_samples: list[dict[str, Any]] = []
         valid_scores: list[float] = []
         skipped_samples: list[dict[str, Any]] = []
         failed_samples: list[dict[str, Any]] = []
@@ -165,7 +130,7 @@ class AppearanceConsistencyMetric:
                     "reason": f"{type(exc).__name__}: {exc}",
                 }
 
-            details.append(sample_result)
+            evaluated_samples.append(sample_result)
 
             status = sample_result.get("status")
             score = sample_result.get("score")
@@ -201,7 +166,7 @@ class AppearanceConsistencyMetric:
             "score": final_score,
             "num_samples": len(valid_scores),
             "details": {
-                "evaluated_samples": details,
+                "evaluated_samples": evaluated_samples,
                 "skipped_samples": skipped_samples,
                 "failed_samples": failed_samples,
             },
@@ -375,13 +340,13 @@ class AppearanceConsistencyMetric:
             }
 
         features = self._extract_dino_features(frames)
-        metrics = self._compute_subject_metrics(features)
+        metrics = self._compute_appearance_metrics(features)
 
         if metrics is None:
             return {
                 "video_path": video_path,
                 "status": "skipped",
-                "reason": "failed to compute subject metrics",
+                "reason": "failed to compute appearance metrics",
                 "sampled_frame_indices": frame_indices,
                 "readable_frame_indices": valid_indices,
             }
@@ -403,7 +368,7 @@ class AppearanceConsistencyMetric:
         }
         return result
 
-    def _compute_subject_metrics(self, features: Any) -> Optional[dict[str, Any]]:
+    def _compute_appearance_metrics(self, features: Any) -> dict[str, Any] | None:
         torch = self._torch
         if torch is None:
             raise RuntimeError("torch is not initialized")
@@ -462,7 +427,7 @@ class AppearanceConsistencyMetric:
     # DINO utilities
     # ------------------------------------------------------------------
 
-    def _ensure_dino(self) -> Optional[str]:
+    def _ensure_dino(self) -> str | None:
         """Initialize DINO lazily.
 
         Returns None if ready, otherwise a reason string.
@@ -496,13 +461,13 @@ class AppearanceConsistencyMetric:
         except Exception as exc:  # noqa: BLE001
             return f"torchvision is required for appearance_consistency: {type(exc).__name__}: {exc}"
 
-        if not self.repo_or_dir:
+        if not self.repo_path:
             return (
                 "DINO repo path is required. Set config['repo_or_dir'] or "
                 "config['dino_repo_path'] to the local DINO repository."
             )
 
-        repo_path = Path(str(self.repo_or_dir)).expanduser().resolve()
+        repo_path = Path(str(self.repo_path)).expanduser().resolve()
         if not repo_path.exists():
             return f"DINO repo path does not exist: {repo_path}"
 
@@ -511,13 +476,13 @@ class AppearanceConsistencyMetric:
         if str(repo_path) not in sys.path:
             sys.path.insert(0, str(repo_path))
 
-        if not self.weights_path:
+        if not self.weight_path:
             return (
                 "DINO weights path is required. Set config['weights_path'] or "
                 "config['dino_weight_path'] to a local DINO .pth file."
             )
 
-        weight_path = Path(str(self.weights_path)).expanduser().resolve()
+        weight_path = Path(str(self.weight_path)).expanduser().resolve()
         if not weight_path.exists():
             return f"DINO weights path does not exist: {weight_path}"
 
@@ -723,6 +688,7 @@ class AppearanceConsistencyMetric:
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"cv2 is required for appearance_consistency: {exc}") from exc
 
+# Legacy alias kept for compatibility with older imports.
 AppearanceConsistency = AppearanceConsistencyMetric
 
 def clamp01(value: float) -> float:

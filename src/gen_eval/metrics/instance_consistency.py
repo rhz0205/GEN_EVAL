@@ -1,3 +1,5 @@
+"""Instance-level consistency metric."""
+
 from __future__ import annotations
 
 import math
@@ -8,26 +10,30 @@ from gen_eval.schemas import GenerationSample, ObjectTrack
 
 
 class InstanceConsistencyMetric:
+    """Measure track-level stability from object metadata and embeddings."""
+
     name = "instance_consistency"
 
-    def __init__(self, config: dict[str, Any]) -> None:
-        self.config = config
-        self.objects_key = str(config.get("objects_key", "objects"))
-        self.object_tracks_key = str(config.get("object_tracks_key", "object_tracks"))
-        self.object_crops_key = str(config.get("object_crops_key", "object_crops"))
-        self.object_features_key = str(config.get("object_features_key", "object_features"))
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self.config = config or {}
+        metric_config = self.config
+        self.objects_key = str(metric_config.get("objects_key", "objects"))
+        self.object_tracks_key = str(metric_config.get("object_tracks_key", "object_tracks"))
+        self.object_crops_key = str(metric_config.get("object_crops_key", "object_crops"))
+        self.object_features_key = str(metric_config.get("object_features_key", "object_features"))
         self.object_class_scores_key = str(
-            config.get("object_class_scores_key", "object_class_scores")
+            metric_config.get("object_class_scores_key", "object_class_scores")
         )
         self.object_identities_key = str(
-            config.get("object_identities_key", "object_identities")
+            metric_config.get("object_identities_key", "object_identities")
         )
-        self.feature_weight = float(config.get("feature_weight", 0.35))
-        self.class_weight = float(config.get("class_weight", 0.2))
-        self.confidence_weight = float(config.get("confidence_weight", 0.15))
-        self.geometry_weight = float(config.get("geometry_weight", 0.3))
+        self.feature_weight = float(metric_config.get("feature_weight", 0.35))
+        self.class_weight = float(metric_config.get("class_weight", 0.2))
+        self.confidence_weight = float(metric_config.get("confidence_weight", 0.15))
+        self.geometry_weight = float(metric_config.get("geometry_weight", 0.3))
 
     def evaluate(self, samples: list[GenerationSample]) -> dict[str, Any]:
+        """Evaluate instance consistency across manifest samples."""
         numpy_status = self._ensure_numpy()
         if numpy_status is not None:
             return self._result(
@@ -481,6 +487,7 @@ class InstanceConsistencyMetric:
         return None
 
 
+# Legacy alias kept for compatibility with older imports.
 InstanceConsistency = InstanceConsistencyMetric
 
 

@@ -1,3 +1,5 @@
+"""Semantic mask consistency metric."""
+
 from __future__ import annotations
 
 import json
@@ -8,25 +10,29 @@ from gen_eval.schemas import GenerationSample
 
 
 class SemanticConsistencyMetric:
+    """Measure temporal consistency from semantic masks or segmentation outputs."""
+
     name = "semantic_consistency"
 
-    def __init__(self, config: dict[str, Any]) -> None:
-        self.config = config
-        self.weights = tuple(config.get("weights", [0.4, 0.4, 0.2]))
-        self.erosion_k = int(config.get("erosion_k", 2))
-        self.min_iou = float(config.get("min_iou", 0.1))
-        self.approximate_palette = bool(config.get("approximate_palette", True))
-        self.ignore_color = self._normalize_color(config.get("ignore_color", [255, 255, 0]))
-        self.max_colors_auto = config.get("max_colors_auto", 1024)
-        self.segmentation_video_key = str(config.get("segmentation_video_key", "segmentation_video"))
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self.config = config or {}
+        metric_config = self.config
+        self.weights = tuple(metric_config.get("weights", [0.4, 0.4, 0.2]))
+        self.erosion_k = int(metric_config.get("erosion_k", 2))
+        self.min_iou = float(metric_config.get("min_iou", 0.1))
+        self.approximate_palette = bool(metric_config.get("approximate_palette", True))
+        self.ignore_color = self._normalize_color(metric_config.get("ignore_color", [255, 255, 0]))
+        self.max_colors_auto = metric_config.get("max_colors_auto", 1024)
+        self.segmentation_video_key = str(metric_config.get("segmentation_video_key", "segmentation_video"))
         self.segmentation_frames_key = str(
-            config.get("segmentation_frames_key", "segmentation_frames")
+            metric_config.get("segmentation_frames_key", "segmentation_frames")
         )
-        self.semantic_masks_key = str(config.get("semantic_masks_key", "semantic_masks"))
-        self.palette_key = str(config.get("palette_key", "segmentation_palette"))
-        self.num_classes_key = str(config.get("num_classes_key", "semantic_num_classes"))
+        self.semantic_masks_key = str(metric_config.get("semantic_masks_key", "semantic_masks"))
+        self.palette_key = str(metric_config.get("palette_key", "segmentation_palette"))
+        self.num_classes_key = str(metric_config.get("num_classes_key", "semantic_num_classes"))
 
     def evaluate(self, samples: list[GenerationSample]) -> dict[str, Any]:
+        """Evaluate semantic consistency across manifest samples."""
         runtime, reason = self._get_runtime()
         if runtime is None:
             return self._result(
@@ -564,4 +570,5 @@ class _SkipSample(Exception):
     pass
 
 
+# Legacy alias kept for compatibility with older imports.
 SemanticConsistency = SemanticConsistencyMetric

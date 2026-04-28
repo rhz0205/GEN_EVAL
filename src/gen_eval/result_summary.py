@@ -7,28 +7,34 @@ from statistics import mean
 from typing import Any
 
 
-def print_evaluation_summary(payload: dict[str, Any], output_path: str | Path) -> None:
-    print("\nEvaluation finished.")
-    print(f"Run: {payload.get('run_name')}")
-    print(f"Dataset: {payload.get('dataset_name')}")
-    print(f"Manifest: {payload.get('manifest_path')}")
-    print(f"Output dir: {payload.get('output_dir')}")
-    print(f"Saved results: {output_path}")
+def _get_run_section(payload: dict[str, Any]) -> dict[str, Any]:
+    run = payload.get("run")
+    return run if isinstance(run, dict) else {}
 
-    metric_results = payload.get("results", [])
-    if not isinstance(metric_results, list):
-        return
 
-    print("\nMetric summary:")
-    for item in metric_results:
-        if not isinstance(item, dict):
-            continue
-        print(
-            f"- {item.get('metric')}: "
-            f"status={item.get('status')}, "
-            f"score={item.get('score')}, "
-            f"num_samples={item.get('num_samples')}"
-        )
+def _get_manifest_section(payload: dict[str, Any]) -> dict[str, Any]:
+    manifest = payload.get("manifest")
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def _get_config_section(payload: dict[str, Any]) -> dict[str, Any]:
+    config = payload.get("config")
+    return config if isinstance(config, dict) else {}
+
+
+def get_metric_results(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    metrics = payload.get("metrics")
+    if isinstance(metrics, list):
+        return [item for item in metrics if isinstance(item, dict)]
+    results = payload.get("results")
+    if isinstance(results, list):
+        return [item for item in results if isinstance(item, dict)]
+    return []
+
+
+def print_evaluation_summary(payload: dict[str, Any], result_path: str | Path) -> None:
+    for line in format_result_summary(payload, result_path):
+        print(line)
 
 
 def load_result_json(path: str | Path) -> dict[str, Any]:
@@ -179,22 +185,39 @@ def summarize_metric(metric_result: dict[str, Any]) -> list[str]:
 
 
 def format_result_summary(payload: dict[str, Any], result_path: str | Path) -> list[str]:
+    run = _get_run_section(payload)
+    manifest = _get_manifest_section(payload)
+    config = _get_config_section(payload)
+
+    run_name = run.get("run_name", payload.get("run_name"))
+    dataset_name = run.get("dataset_name", payload.get("dataset_name"))
+    timestamp = run.get("timestamp")
+    manifest_path = manifest.get("path", payload.get("manifest_path"))
+    num_samples = manifest.get("num_samples", payload.get("num_samples"))
+    output_root = config.get("output_root", payload.get("output_dir"))
+
     lines = ["Run summary", f"result_path: {result_path}"]
-    if payload.get("run_name") is not None:
-        lines.append(f"run_name: {payload.get('run_name')}")
-    if payload.get("dataset_name") is not None:
-        lines.append(f"dataset_name: {payload.get('dataset_name')}")
-    if payload.get("manifest_path") is not None:
-        lines.append(f"manifest_path: {payload.get('manifest_path')}")
-    if payload.get("output_dir") is not None:
-        lines.append(f"output_dir: {payload.get('output_dir')}")
+    if run_name is not None:
+        lines.append(f"run_name: {run_name}")
+    if dataset_name is not None:
+        lines.append(f"dataset_name: {dataset_name}")
+    if timestamp is not None:
+        lines.append(f"timestamp: {timestamp}")
+    if manifest_path is not None:
+        lines.append(f"manifest_path: {manifest_path}")
+    if output_root is not None:
+        lines.append(f"output_root: {output_root}")
+    if num_samples is not None:
+        lines.append(f"num_samples: {_format_number(num_samples)}")
 
     runtime = payload.get("runtime")
-    if isinstance(runtime, dict) and runtime.get("device") is not None:
-        lines.append(f"runtime.device: {runtime.get('device')}")
+    if isinstance(runtime, dict):
+        if runtime.get("backend") is not None:
+            lines.append(f"runtime.backend: {runtime.get('backend')}")
+        if runtime.get("device") is not None:
+            lines.append(f"runtime.device: {runtime.get('device')}")
 
-    metric_results = payload.get("results")
-    metric_results = metric_results if isinstance(metric_results, list) else []
+    metric_results = get_metric_results(payload)
     lines.append(f"num_metric_results: {len(metric_results)}")
     lines.append("")
     lines.append("Metric summary")

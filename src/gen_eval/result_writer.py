@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -30,46 +32,121 @@ def safe_filename(text: str) -> str:
     return name or "eval"
 
 
-def resolve_output_path(
-    output_dir: str | Path,
-    config_path: str | Path,
-    explicit_output: str | None = None,
-) -> Path:
-    if explicit_output:
-        output_path = Path(explicit_output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        return output_path
+def make_timestamp(created_at: datetime | None = None) -> str:
+    created_time = created_at or datetime.now()
+    return created_time.strftime("%Y%m%d_%H%M%S")
 
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    config_stem = safe_filename(Path(config_path).stem)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return out_dir / f"{config_stem}_results_{timestamp}.json"
+
+def resolve_output_paths(
+    output_dir: str | Path,
+    timestamp: str,
+    explicit_output: str | None = None,
+) -> dict[str, Path]:
+    if explicit_output:
+        result_path = Path(explicit_output)
+        run_dir = result_path.parent
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "run_dir": run_dir,
+            "timestamp_dir": run_dir,
+            "result_path": result_path,
+            "summary_path": run_dir / "summary.txt",
+            "latest_path": run_dir / "latest.txt",
+        }
+
+    run_dir = Path(output_dir)
+    timestamp_dir = run_dir / timestamp
+    timestamp_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "run_dir": run_dir,
+        "timestamp_dir": timestamp_dir,
+        "result_path": timestamp_dir / "result.json",
+        "summary_path": timestamp_dir / "summary.txt",
+        "latest_path": run_dir / "latest.txt",
+    }
+
+
+def get_command_string() -> str:
+    return " ".join(sys.argv)
+
+
+def get_git_commit() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except Exception:
+        return None
+
+    commit = result.stdout.strip()
+    return commit or None
 
 
 def build_result_payload(
     resolved_config: dict[str, Any],
     evaluation_result: dict[str, Any],
+    *,
+    command: str | None = None,
+    git_commit: str | None = None,
+    created_at: datetime | None = None,
 ) -> dict[str, Any]:
+    created_time = created_at or datetime.now()
+    timestamp = make_timestamp(created_time)
+    manifest_path = resolved_config.get("manifest_path")
+    metric_results = evaluation_result.get("results", [])
+
     return {
-        "run_name": resolved_config.get("run_name"),
-        "dataset": resolved_config.get("dataset"),
-        "dataset_name": resolved_config.get("dataset_name"),
-        "manifest_path": resolved_config.get("manifest_path"),
-        "config_path": resolved_config.get("config_path"),
-        "output_dir": resolved_config.get("output_dir"),
+        "run": {
+            "run_name": resolved_config.get("run_name"),
+            "dataset": resolved_config.get("dataset"),
+            "dataset_name": resolved_config.get("dataset_name"),
+            "created_at": created_time.isoformat(timespec="seconds"),
+            "timestamp": timestamp,
+            "command": command,
+            "git_commit": git_commit,
+        },
         "runtime": resolved_config.get("runtime", {}),
-        "results": evaluation_result.get("results", []),
-        "num_samples": evaluation_result.get("num_samples"),
+        "manifest": {
+            "path": manifest_path,
+            "num_samples": evaluation_result.get("num_samples"),
+        },
+        "config": {
+            "run_config_path": resolved_config.get("config_path"),
+            "dataset_config_path": resolved_config.get("dataset_config_path"),
+            "metric_config_path": resolved_config.get("metric_config_path"),
+            "selected_metrics": resolved_config.get("selected_metrics", []),
+            "output_root": resolved_config.get("output_dir"),
+        },
+        "metrics": metric_results if isinstance(metric_results, list) else [],
     }
 
 
-def save_result_payload(
+def save_result_bundle(
     payload: dict[str, Any],
     output_dir: str | Path,
-    config_path: str | Path,
     explicit_output: str | None = None,
-) -> Path:
-    output_path = resolve_output_path(output_dir, config_path, explicit_output)
-    write_results(output_path, payload)
-    return output_path
+) -> dict[str, Path]:
+    from gen_eval.result_summary import format_result_summary
+
+    run_info = payload.get("run")
+    timestamp = None
+    if isinstance(run_info, dict):
+        raw_timestamp = run_info.get("timestamp")
+        if isinstance(raw_timestamp, str) and raw_timestamp:
+            timestamp = raw_timestamp
+    if not timestamp:
+        timestamp = make_timestamp()
+
+    output_paths = resolve_output_paths(output_dir, timestamp, explicit_output)
+    write_results(output_paths["result_path"], payload)
+
+    summary_lines = format_result_summary(payload, output_paths["result_path"])
+    output_paths["summary_path"].write_text(
+        "\n".join(summary_lines) + "\n",
+        encoding="utf-8",
+    )
+    output_paths["latest_path"].write_text(f"{timestamp}\n", encoding="utf-8")
+    return output_paths

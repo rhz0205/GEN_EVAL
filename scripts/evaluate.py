@@ -15,7 +15,12 @@ if str(SRC_ROOT) not in sys.path:
 from gen_eval.config import resolve_run_config
 from gen_eval.execution import run_evaluation
 from gen_eval.result_summary import print_evaluation_summary
-from gen_eval.result_writer import build_result_payload, save_result_payload
+from gen_eval.result_writer import (
+    build_result_payload,
+    get_command_string,
+    get_git_commit,
+    save_result_bundle,
+)
 
 
 def main() -> int:
@@ -31,15 +36,19 @@ def main() -> int:
     resolved_config = resolve_run_config(args.config)
     results = run_evaluation(resolved_config)
 
-    payload = build_result_payload(resolved_config, results)
+    payload = build_result_payload(
+        resolved_config,
+        results,
+        command=get_command_string(),
+        git_commit=get_git_commit(),
+    )
 
-    output_path = save_result_payload(
+    output_paths = save_result_bundle(
         payload=payload,
         output_dir=str(resolved_config.get("output_dir") or "outputs"),
-        config_path=args.config,
         explicit_output=args.output,
     )
-    print_evaluation_summary(payload, output_path)
+    print_evaluation_summary(payload, output_paths["result_path"])
     return 0
 
 

@@ -54,7 +54,10 @@ def normalize_runtime_config(runtime: dict[str, Any] | None) -> dict[str, Any]:
 def resolve_run_config(config_path: str | Path) -> dict[str, Any]:
     run_config_path = Path(config_path).resolve()
     run_config = load_yaml(run_config_path)
-    run_name = run_config_path.stem
+    run_name_value = run_config.get("run_name")
+    if run_name_value is not None and not isinstance(run_name_value, str):
+        raise ValueError("Run config field 'run_name' must be a string when provided.")
+    run_name = run_name_value or run_config_path.stem
 
     dataset = run_config.get("dataset")
     if not dataset or not isinstance(dataset, str):
@@ -89,7 +92,7 @@ def resolve_run_config(config_path: str | Path) -> dict[str, Any]:
         metrics[metric_name] = metric_config
 
     dataset_name = dataset_config.get("dataset_name") or dataset
-    output_dir = default_output_dir(dataset, run_name)
+    output_dir = default_output_dir(str(dataset_name), run_name)
 
     return {
         "run_name": run_name,
