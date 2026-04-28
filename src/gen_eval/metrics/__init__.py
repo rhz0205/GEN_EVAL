@@ -34,36 +34,38 @@ class PlaceholderMetric:
         }
 
 
-from .cross_view_consistency import CrossViewConsistency
-from .depth_consistency import DepthConsistency
-from .fvd import FVDMetric
-from .object_coherence import ObjectCoherence
-from .subject_consistency import SubjectConsistency
-from .temporal_consistency import TemporalConsistency
-from .temporal_semantic_consistency import TemporalSemanticConsistency
-
-
 def register_builtin_metrics() -> None:
-    for metric_class in (
-        FVDMetric,
+    from .depth_consistency import DepthConsistency
+    from .instance_consistency import InstanceConsistency
+    from .semantic_consistency import SemanticConsistency
+    from .temporal_consistency import TemporalConsistency
+    from .view_consistency import ViewConsistency
+    from .appearance_consistency import AppearanceConsistency
+
+    fvd_metric = None
+    try:
+        from .fvd import FVDMetric
+
+        fvd_metric = FVDMetric
+    except ModuleNotFoundError:
+        fvd_metric = None
+
+    metric_classes = [
+        ViewConsistency,
         TemporalConsistency,
-        SubjectConsistency,
-        TemporalSemanticConsistency,
+        AppearanceConsistency,
+        SemanticConsistency,
         DepthConsistency,
-        ObjectCoherence,
-        CrossViewConsistency,
-    ):
+        InstanceConsistency,
+    ]
+    if fvd_metric is not None:
+        metric_classes.insert(0, fvd_metric)
+
+    for metric_class in metric_classes:
         registry.register(metric_class)
 
 
 __all__ = [
     "PlaceholderMetric",
     "register_builtin_metrics",
-    "FVDMetric",
-    "TemporalConsistency",
-    "SubjectConsistency",
-    "TemporalSemanticConsistency",
-    "DepthConsistency",
-    "ObjectCoherence",
-    "CrossViewConsistency",
 ]

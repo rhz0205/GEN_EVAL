@@ -1,15 +1,18 @@
-"""Temporal consistency metric for GEN_EVAL.
+"""Subject consistency metric for GEN_EVAL.
 
 This implementation provides a reference-free / self-consistency mode for
 generated videos.
 
-The metric uses CLIP image embeddings extracted from sampled video frames and
-computes:
+Compared with temporal_consistency, this metric uses DINO image embeddings
+instead of CLIP embeddings. DINO features are generally more sensitive to
+visual structure, object appearance, texture, and local subject stability.
+
+The metric computes:
 
 - ACM: Adjacent-frame Cosine similarity Mean.
-  Higher means adjacent frames are more visually/semantically consistent.
+  Higher means adjacent frames are more visually/structurally consistent.
 
-- TJI: Temporal Jerkiness Index in CLIP feature space.
+- TJI: Temporal Jerkiness Index in DINO feature space.
   Higher means the feature trajectory has stronger abrupt second-order change.
 
 - TJI score: exp(-0.5 * TJI).
@@ -18,6 +21,12 @@ computes:
 - TS: Temporal self-consistency score.
   TS = ACM / (1 + TJI)
 
+- balanced_score:
+  0.5 * ACM + 0.5 * TJI_score
+
+The current recommended score_key is "balanced_score", because TS can be
+numerically conservative when TJI is large.
+
 This file is manifest-driven and does not depend on WorldLens directory
 conventions, WorldLens utils, or online model downloads.
 """
@@ -25,15 +34,14 @@ conventions, WorldLens utils, or online model downloads.
 from __future__ import annotations
 
 import math
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
-import json
+class AppearanceConsistencyMetric:
+    """Reference-free DINO-based appearance consistency metric."""
 
-class TemporalConsistencyMetric:
-    """Reference-free temporal consistency metric."""
-
-    name = "temporal_consistency"
+    name = "appearance_consistency"
 
     def __init__(self, config: Optional[dict[str, Any]] = None):
         self.config = config or {}
@@ -44,23 +52,35 @@ class TemporalConsistencyMetric:
 
         # Runtime / model settings.
         self.device = self.config.get("device", "cuda")
-        self.clip_weight_path = (
+
+        # DINO official repo path. It should point to the local dino repo root.
+        # The repo root should support:
+        # torch.hub.load(repo_or_dir, model_name, source="local", pretrained=False)
+        self.repo_or_dir = (
+            self.config.get("repo_path")
+            or self.config.get("repo_or_dir")
+            or self.config.get("dino_repo_path")
+            or self.config.get("local_repo_path")
+        )
+
+        # DINO weight path, e.g. dino_vitbase16_pretrain.pth.
+        self.weights_path = (
             self.config.get("weight_path")
-            or self.config.get("clip_weight_path")
+            or self.config.get("weights_path")
+            or self.config.get("dino_weight_path")
             or self.config.get("local_save_path")
         )
 
-        # Only used if explicitly allowed. This may trigger CLIP cache/download
-        # behavior depending on the installed clip package, so it is disabled by
-        # default for offline servers.
-        self.clip_model_name = self.config.get("clip_model_name", "ViT-B/32")
-        self.allow_clip_model_name = bool(self.config.get("allow_clip_model_name", False))
+        self.model_name = self.config.get("model_name", "dino_vitb16")
+        self.use_fp16 = bool(self.config.get("use_fp16", False))
+        self.strict_load = bool(self.config.get("strict_load", True))
 
         # Frame sampling.
         self.num_frames = int(self.config.get("num_frames", 8))
         self.frame_positions = self.config.get("frame_positions")
-        self.resize = int(self.config.get("resize", 224))
+        self.image_size = int(self.config.get("image_size", self.config.get("resize", 224)))
         self.batch_size = int(self.config.get("batch_size", 16))
+        self.min_frames = int(self.config.get("min_frames", 3))
 
         # View handling.
         # False: only sample.generated_video, usually camera_front.mp4.
@@ -73,29 +93,32 @@ class TemporalConsistencyMetric:
             self.exclude_views.add("camera_front_tele")
 
         # Score options.
-        self.score_key = self.config.get("score_key", "ts")
-        self.min_frames = int(self.config.get("min_frames", 3))
+        # Available keys: acm, tji_score, ts, balanced_score.
+        self.score_key = self.config.get("score_key", "balanced_score")
+        self.balanced_acm_weight = float(self.config.get("balanced_acm_weight", 0.5))
+        self.balanced_tji_weight = float(self.config.get("balanced_tji_weight", 0.5))
 
         # Lazy runtime objects.
         self._torch = None
-        self._clip = None
         self._cv2 = None
+        self._torchvision_transforms = None
+        self._torchvision_tf = None
         self._pil_image = None
-        self._clip_model = None
-        self._preprocess = None
+        self._dino_model = None
+        self._transform = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def evaluate(self, samples: list[Any]) -> dict[str, Any]:
-        """Evaluate temporal consistency over manifest samples."""
+        """Evaluate subject consistency over manifest samples."""
         details: list[dict[str, Any]] = []
         valid_scores: list[float] = []
         skipped_samples: list[dict[str, Any]] = []
         failed_samples: list[dict[str, Any]] = []
 
-        runtime_status = self._ensure_clip()
+        runtime_status = self._ensure_dino()
         if runtime_status is not None:
             return {
                 "metric": self.name,
@@ -127,7 +150,7 @@ class TemporalConsistencyMetric:
                         "mode": self.mode,
                         "score": None,
                         "status": "skipped",
-                        "reason": f"Unsupported temporal_consistency mode: {self.mode}",
+                        "reason": f"Unsupported appearance_consistency mode: {self.mode}",
                     }
                 else:
                     sample_result = self._evaluate_self_sample(sample)
@@ -171,7 +194,7 @@ class TemporalConsistencyMetric:
         else:
             final_score = None
             status = "skipped" if not failed_samples else "failed"
-            reason = "No sample produced a valid temporal consistency score."
+            reason = "No sample produced a valid appearance consistency score."
 
         result = {
             "metric": self.name,
@@ -224,7 +247,7 @@ class TemporalConsistencyMetric:
                 "video_result": video_result,
             }
 
-        score = float(video_result.get(self.score_key, video_result.get("ts", 0.0)))
+        score = self._select_score(video_result)
 
         return {
             "sample_id": sample_id,
@@ -262,11 +285,8 @@ class TemporalConsistencyMetric:
             result = self._evaluate_single_video(str(path))
             view_results[view] = result
 
-            if (
-                result.get("status") == "ok"
-                and isinstance(result.get(self.score_key, result.get("ts")), (int, float))
-            ):
-                score = float(result.get(self.score_key, result.get("ts")))
+            if result.get("status") == "ok":
+                score = self._select_score(result)
                 if math.isfinite(score):
                     view_scores.append(score)
 
@@ -277,7 +297,7 @@ class TemporalConsistencyMetric:
                 "mode": "self",
                 "score": None,
                 "status": "skipped",
-                "reason": "No camera view produced a valid temporal consistency score.",
+                "reason": "No camera view produced a valid appearance consistency score.",
                 "view_results": view_results,
             }
 
@@ -292,6 +312,19 @@ class TemporalConsistencyMetric:
             "num_views": len(view_scores),
             "view_results": view_results,
         }
+
+    def _select_score(self, result: dict[str, Any]) -> float:
+        value = result.get(self.score_key)
+        if isinstance(value, (int, float)) and math.isfinite(float(value)):
+            return float(value)
+
+        # Fallback order.
+        for key in ("balanced_score", "ts", "acm", "tji_score"):
+            value = result.get(key)
+            if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                return float(value)
+
+        return 0.0
 
     # ------------------------------------------------------------------
     # Video-level evaluation
@@ -341,14 +374,14 @@ class TemporalConsistencyMetric:
                 "readable_frame_indices": valid_indices,
             }
 
-        features = self._extract_clip_features(frames)
-        metrics = self._compute_temporal_metrics(features)
+        features = self._extract_dino_features(frames)
+        metrics = self._compute_subject_metrics(features)
 
         if metrics is None:
             return {
                 "video_path": video_path,
                 "status": "skipped",
-                "reason": "failed to compute temporal metrics",
+                "reason": "failed to compute subject metrics",
                 "sampled_frame_indices": frame_indices,
                 "readable_frame_indices": valid_indices,
             }
@@ -356,7 +389,7 @@ class TemporalConsistencyMetric:
         result = {
             "video_path": video_path,
             "status": "ok",
-            "score": metrics["ts"],
+            "score": metrics["balanced_score"],
             "acm": metrics["acm"],
             "video_sim": metrics["video_sim"],
             "num_frames": len(frames),
@@ -364,12 +397,13 @@ class TemporalConsistencyMetric:
             "tji": metrics["tji"],
             "tji_score": metrics["tji_score"],
             "ts": metrics["ts"],
+            "balanced_score": metrics["balanced_score"],
             "sampled_frame_indices": frame_indices,
             "readable_frame_indices": valid_indices,
         }
         return result
 
-    def _compute_temporal_metrics(self, features: Any) -> Optional[dict[str, Any]]:
+    def _compute_subject_metrics(self, features: Any) -> Optional[dict[str, Any]]:
         torch = self._torch
         if torch is None:
             raise RuntimeError("torch is not initialized")
@@ -407,6 +441,13 @@ class TemporalConsistencyMetric:
             if not math.isfinite(ts):
                 ts = 0.0
 
+            balanced_score = weighted_average(
+                [
+                    (acm, self.balanced_acm_weight),
+                    (tji_score, self.balanced_tji_weight),
+                ]
+            )
+
         return {
             "acm": clamp01(acm),
             "video_sim": video_sim,
@@ -414,18 +455,19 @@ class TemporalConsistencyMetric:
             "tji": float(tji),
             "tji_score": clamp01(tji_score),
             "ts": clamp01(float(ts)),
+            "balanced_score": clamp01(float(balanced_score)),
         }
 
     # ------------------------------------------------------------------
-    # CLIP utilities
+    # DINO utilities
     # ------------------------------------------------------------------
 
-    def _ensure_clip(self) -> Optional[str]:
-        """Initialize CLIP lazily.
+    def _ensure_dino(self) -> Optional[str]:
+        """Initialize DINO lazily.
 
         Returns None if ready, otherwise a reason string.
         """
-        if self._clip_model is not None and self._preprocess is not None:
+        if self._dino_model is not None and self._transform is not None:
             return None
 
         try:
@@ -433,78 +475,139 @@ class TemporalConsistencyMetric:
 
             self._torch = torch
         except Exception as exc:  # noqa: BLE001
-            return f"torch is required for temporal_consistency: {type(exc).__name__}: {exc}"
+            return f"torch is required for appearance_consistency: {type(exc).__name__}: {exc}"
 
         if self.device == "cuda" and not self._torch.cuda.is_available():
             self.device = "cpu"
-
-        try:
-            import clip  # type: ignore
-
-            self._clip = clip
-        except Exception as exc:  # noqa: BLE001
-            return f"clip package is required for temporal_consistency: {type(exc).__name__}: {exc}"
 
         try:
             from PIL import Image  # type: ignore
 
             self._pil_image = Image
         except Exception as exc:  # noqa: BLE001
-            return f"PIL is required for temporal_consistency: {type(exc).__name__}: {exc}"
-
-        model_source = None
-
-        if self.clip_weight_path:
-            weight_path = Path(str(self.clip_weight_path)).expanduser().resolve()
-            if not weight_path.exists():
-                return f"CLIP weight path does not exist: {weight_path}"
-            model_source = str(weight_path)
-        elif self.allow_clip_model_name:
-            # This may rely on local CLIP cache or trigger download depending on
-            # clip package behavior. Disabled by default for offline servers.
-            model_source = self.clip_model_name
-        else:
-            return (
-                "CLIP weight path is required. Set config['clip_weight_path'] to a local "
-                "CLIP .pt file, or set allow_clip_model_name=true only if the model is "
-                "already cached locally."
-            )
+            return f"PIL is required for appearance_consistency: {type(exc).__name__}: {exc}"
 
         try:
-            model, preprocess = self._clip.load(model_source, device=self.device, jit=False)
+            from torchvision import transforms  # type: ignore
+            from torchvision.transforms import functional as TF  # type: ignore
+
+            self._torchvision_transforms = transforms
+            self._torchvision_tf = TF
+        except Exception as exc:  # noqa: BLE001
+            return f"torchvision is required for appearance_consistency: {type(exc).__name__}: {exc}"
+
+        if not self.repo_or_dir:
+            return (
+                "DINO repo path is required. Set config['repo_or_dir'] or "
+                "config['dino_repo_path'] to the local DINO repository."
+            )
+
+        repo_path = Path(str(self.repo_or_dir)).expanduser().resolve()
+        if not repo_path.exists():
+            return f"DINO repo path does not exist: {repo_path}"
+
+        # torch.hub.load(..., source='local') normally accepts repo path directly.
+        # Adding it to sys.path also helps if the repo uses relative imports.
+        if str(repo_path) not in sys.path:
+            sys.path.insert(0, str(repo_path))
+
+        if not self.weights_path:
+            return (
+                "DINO weights path is required. Set config['weights_path'] or "
+                "config['dino_weight_path'] to a local DINO .pth file."
+            )
+
+        weight_path = Path(str(self.weights_path)).expanduser().resolve()
+        if not weight_path.exists():
+            return f"DINO weights path does not exist: {weight_path}"
+
+        try:
+            model = self._torch.hub.load(
+                str(repo_path),
+                self.model_name,
+                source="local",
+                pretrained=False,
+            )
+            model.to(self.device)
+
+            state_dict = self._torch.load(str(weight_path), map_location=self.device)
+            model.load_state_dict(state_dict, strict=self.strict_load)
+
+            if self.use_fp16 and self.device == "cuda":
+                model = model.half()
+
             model.eval()
 
-            self._clip_model = model
-            self._preprocess = preprocess
+            self._dino_model = model
+            self._transform = self._build_transform()
             return None
 
         except Exception as exc:  # noqa: BLE001
-            self._clip_model = None
-            self._preprocess = None
-            return f"Failed to load CLIP model: {type(exc).__name__}: {exc}"
+            self._dino_model = None
+            self._transform = None
+            return f"Failed to load DINO model: {type(exc).__name__}: {exc}"
 
-    def _extract_clip_features(self, frames: list[Any]) -> Any:
+    def _build_transform(self) -> Any:
+        transforms = self._torchvision_transforms
+        TF = self._torchvision_tf
+        if transforms is None or TF is None:
+            raise RuntimeError("torchvision transforms are not initialized")
+
+        def robust_to_tensor(x: Any) -> Any:
+            torch = self._torch
+            if torch is None:
+                raise RuntimeError("torch is not initialized")
+
+            if isinstance(x, torch.Tensor):
+                if x.dtype == torch.uint8:
+                    return x.float() / 255.0
+                return x
+
+            return TF.to_tensor(x)
+
+        return transforms.Compose(
+            [
+                transforms.Lambda(robust_to_tensor),
+                transforms.Resize(
+                    self.image_size,
+                    interpolation=transforms.InterpolationMode.BICUBIC,
+                    antialias=True,
+                ),
+                transforms.CenterCrop(self.image_size),
+                transforms.Normalize(
+                    (0.485, 0.456, 0.406),
+                    (0.229, 0.224, 0.225),
+                ),
+            ]
+        )
+
+    def _extract_dino_features(self, frames: list[Any]) -> Any:
         torch = self._torch
         if torch is None:
             raise RuntimeError("torch is not initialized")
-        if self._clip_model is None or self._preprocess is None:
-            raise RuntimeError("CLIP model is not initialized")
+        if self._dino_model is None or self._transform is None:
+            raise RuntimeError("DINO model is not initialized")
 
         images = []
         for frame_rgb in frames:
             pil_img = self._pil_image.fromarray(frame_rgb)
-            images.append(self._preprocess(pil_img))
+            images.append(self._transform(pil_img))
 
-        all_features = []
+        features_list = []
+
         with torch.no_grad():
             for start in range(0, len(images), self.batch_size):
                 batch = images[start : start + self.batch_size]
                 batch_tensor = torch.stack(batch, dim=0).to(self.device)
-                features = self._clip_model.encode_image(batch_tensor)
-                features = torch.nn.functional.normalize(features, dim=-1, p=2)
-                all_features.append(features)
 
-            return torch.cat(all_features, dim=0)
+                if self.use_fp16 and self.device == "cuda":
+                    batch_tensor = batch_tensor.half()
+
+                features = self._dino_model(batch_tensor)
+                features = torch.nn.functional.normalize(features, dim=-1, p=2)
+                features_list.append(features)
+
+        return torch.cat(features_list, dim=0)
 
     # ------------------------------------------------------------------
     # Video utilities
@@ -618,13 +721,28 @@ class TemporalConsistencyMetric:
             return cv2
 
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"cv2 is required for temporal_consistency: {exc}") from exc
+            raise RuntimeError(f"cv2 is required for appearance_consistency: {exc}") from exc
 
-# Backward-compatible aliases.
-TemporalConsistency = TemporalConsistencyMetric
-TEMPORAL_CONSISTENCY = TemporalConsistencyMetric
+AppearanceConsistency = AppearanceConsistencyMetric
 
 def clamp01(value: float) -> float:
     if not math.isfinite(float(value)):
         return 0.0
     return max(0.0, min(1.0, float(value)))
+
+def weighted_average(items: list[tuple[float | None, float]]) -> float:
+    total = 0.0
+    weight_sum = 0.0
+
+    for value, weight in items:
+        if value is None:
+            continue
+        if weight <= 0:
+            continue
+        total += clamp01(float(value)) * float(weight)
+        weight_sum += float(weight)
+
+    if weight_sum <= 0:
+        return 0.0
+
+    return clamp01(total / weight_sum)

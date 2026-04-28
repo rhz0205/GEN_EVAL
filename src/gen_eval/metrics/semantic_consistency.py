@@ -4,13 +4,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from gen_eval.schemas import GenerationSample
 
 
-class TemporalSemanticConsistency:
-    name = "temporal_semantic_consistency"
+class SemanticConsistencyMetric:
+    name = "semantic_consistency"
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
@@ -132,6 +130,8 @@ class TemporalSemanticConsistency:
 
     def _get_runtime(self) -> tuple[dict[str, Any] | None, str | None]:
         try:
+            global np
+            import numpy as np  # type: ignore
             import imageio.v2 as imageio  # type: ignore
             from PIL import Image
             from scipy.optimize import linear_sum_assignment
@@ -562,3 +562,6 @@ class TemporalSemanticConsistency:
 
 class _SkipSample(Exception):
     pass
+
+
+SemanticConsistency = SemanticConsistencyMetric

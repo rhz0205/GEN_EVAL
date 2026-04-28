@@ -1,130 +1,203 @@
-# GEN_EVAL Refactor Rules
+GEN_EVAL project rules:
 
-This repository contains the official WorldLens source under:
+GEN_EVAL is a lightweight, manifest-driven, offline evaluation toolkit for multi-view autonomous-driving generated videos. It is adapted from WorldLens generation metrics, but it must not revert to WorldLens-style engineering.
 
-worldlens/
-
-Treat `worldlens/` as a read-only reference source. Do not edit files under `worldlens/` unless explicitly requested.
-
-The target lightweight package is:
-
-src/gen_eval/
-
-## Goal
-
-Refactor only the video generation evaluation part of WorldLens into a lightweight package named GEN_EVAL.
-
-Keep only generation-related evaluation code.
-
-Do not migrate:
-- reconstruction
-- downstream task evaluation
-- action-following
-- lidar generation
-- occupancy generation
-- third_party heavy dependencies
-- nuScenes-specific dataset pipelines
-
-## Current constraints
-
-The local machine does not have:
-- WorldLens runtime environment
-- pretrained weights
-- full dataset
-
-Therefore:
-- Do not run model-dependent tests.
+Hard constraints:
+- Do not revert to WorldLens-style `method_name/generated_results/video_submission/__call__` APIs.
+- Do not use `worldbench.utils.common` or `video_relative` in `src/gen_eval`.
+- Do not use `git clone`, `wget`, or online downloads.
 - Do not install packages.
-- Do not download weights.
-- Do not use network access.
-- Focus on static refactoring, import cleanup, data-interface replacement, and clear TODOs.
+- Do not modify `pretrained_models` content.
+- Do not run 1k or full-scale evaluations unless explicitly requested.
+- Metrics must expose `evaluate(samples) -> dict`.
+- Inputs must be manifest-driven.
+- Model paths must be local and configurable.
+- If a dependency, model, or path is missing, return skipped/failed instead of crashing the whole evaluation.
 
-## Source paths
+Current canonical dataset groups:
+- `sample_data`
+- `geely_data`
+- `cosmos_data`
+- `real_data`
 
-Use these WorldLens source paths for reference:
+Do not use `debug` as a dataset group name.
 
-worldlens/worldbench/videogen/generation/temporal_consistency
-worldlens/worldbench/videogen/generation/subject_consistency
-worldlens/worldbench/videogen/generation/temporal_semantic_consistency
-worldlens/worldbench/videogen/generation/perceptual_fidelity/fvd
-worldlens/worldbench/videogen/generation/depth_consistency
-worldlens/worldbench/videogen/generation/object_coherence
+Current canonical metric names:
+- `view_consistency`
+- `temporal_consistency`
+- `appearance_consistency`
+- `depth_consistency`
+- `semantic_consistency`
+- `instance_consistency`
 
-## Target package layout
+Current preferred project layout:
+
+```text
+configs/
+  datasets/
+  metrics.yaml
+  runs/
+
+manifests/
+  sample.json
+  geely.json
+  cosmos.json
+  real.json
+
+outputs/
+  sample_data/
+  geely_data/
+  cosmos_data/
+  real_data/
+
+scripts/
+  evaluate.py
+  manifest_from_pkl.py
+  inspect_manifest.py
+  summarize_results.py
 
 src/gen_eval/
-  evaluator.py
-  registry.py
+  __init__.py
   schemas.py
   dataset.py
-  video_io.py
+  evaluator.py
+  registry.py
   result_writer.py
   metrics/
-    fvd.py
-    temporal_consistency.py
-    subject_consistency.py
-    temporal_semantic_consistency.py
-    depth_consistency.py
-    object_coherence.py
-  models/
-    backbones.py
-    depth.py
-    object.py
-  utils/
-    paths.py
-    media.py
 
-## Data interface
+src/third_party/
+  video_depth_anything/
+```
 
-All metrics must use GenerationSample from src/gen_eval/schemas.py.
+Minimal core package responsibilities:
+- `schemas.py`: sample schema
+- `dataset.py`: manifest loading
+- `evaluator.py`: runs enabled metrics
+- `registry.py`: maps canonical metric names to metric classes
+- `result_writer.py`: writes result JSON
+- `metrics/`: metric implementations
 
-Do not use WorldLens dataset classes directly.
-Do not use nuScenes-specific fields directly.
+Keep metric-specific loading logic inside each metric file:
+- LoFTR logic inside `view_consistency.py`
+- CLIP logic inside `temporal_consistency.py`
+- DINO logic inside `appearance_consistency.py`
+- Video-Depth-Anything / DINOv2 logic inside `depth_consistency.py`
 
-Replace dataset access with manifest-based fields:
-- sample_id
-- generated_video
-- reference_video
-- prompt
-- objects
-- metadata
+Do not create or expand extra package layers unless explicitly requested:
+- Do not create `src/gen_eval/models/`.
+- Do not expand `src/gen_eval/utils/` unless absolutely required by existing imports.
 
-## Metric interface
+Config rules:
 
-Each metric should expose:
+Dataset config schema:
 
-class MetricName:
-    name = "metric_name"
+```yaml
+dataset_name: sample_data
+manifest_path: manifests/sample.json
+description: Small-batch sample dataset for fast metric validation.
+default_output_dir: outputs/sample_data
+```
 
-    def __init__(self, config: dict):
-        ...
+Metric config rules:
+- use one merged `configs/metrics.yaml`
+- top-level keys are canonical metric names
+- keep only practical user-facing fields
+- do not require:
+  - `mode`
+  - `backend`
+  - `device`
+  - `score_key`
+  - `use_all_views`
 
-    def evaluate(self, samples: list[GenerationSample]) -> dict:
-        ...
+Run config schema:
 
-Metric code must not load pretrained weights at import time.
-Model and weight loading must be lazy.
+```yaml
+dataset: sample_data
+metrics:
+  - view_consistency
+  - temporal_consistency
+  - appearance_consistency
+  - depth_consistency
+runtime:
+  device: cuda
+```
 
-## Output format
+Run config inference rules:
+- `run_name` comes from the run config filename stem
+- `dataset_config_path` resolves to `configs/datasets/{dataset}.yaml`
+- `metric_config_path` is always `configs/metrics.yaml`
+- `output_dir` resolves to `outputs/{dataset}/{run_name}`
+- `save_details` defaults to `true`
 
-Each metric should return a dict with:
-- metric
-- score
-- num_samples
-- details
-- status
-- reason, when skipped or failed
+Naming rules:
+- manifest filenames under `manifests/` must not add `_manifest`
+- run names must not use `_all`
+- output naming is `outputs/{dataset_group}/{run_name}`
 
-## Working style
+Examples:
+- `manifests/sample.json`
+- `configs/runs/sample.yaml`
+- `configs/runs/sample_view.yaml`
+- `outputs/sample_data/sample`
+- `outputs/geely_data/geely`
 
-Prefer small patches.
-Do not over-engineer.
-Do not create new nested directories unless necessary.
-Do not introduce new dependencies unless explicitly requested.
-Before editing, provide a short plan.
-After editing, report:
-- touched files
-- changes made
-- risks
-- validation not run
-- next steps
+Dependency-checking scope rules:
+
+Codex should only inspect dependencies between existing project files and packages inside this repository.
+
+Focus on:
+- whether `src/gen_eval` modules import each other correctly
+- whether canonical metric modules are referenced correctly
+- whether registry mappings are consistent
+- whether config metric keys match registered metric names
+- whether scripts import project modules correctly
+- whether old metric names only remain as backward-compatible aliases
+
+Codex must not treat missing local runtime dependencies as project errors. In this local workspace, the full evaluation environment is not configured.
+
+Do not report these as code problems unless they are directly caused by project imports:
+- missing `torch`
+- missing `torchvision`
+- missing `numpy`
+- missing `scipy`
+- missing `skimage`
+- missing `cv2`
+- missing `PIL`
+- missing `clip`
+- missing `open_clip`
+- missing `transformers`
+- missing `LoFTR`
+- missing `DINO`
+- missing `DINOv2`
+- missing `Video-Depth-Anything`
+- missing `xFormers`
+- missing `CUDA`
+- missing `PyYAML`
+- missing local model weights
+- invalid local absolute weight paths
+- unavailable `pretrained_models` content
+
+Do not:
+- install packages
+- download weights
+- run environment-dependent metric execution
+- run long evaluations
+- modify `pretrained_models`
+- modify weight paths just because they are placeholders
+
+Allowed checks:
+- static import/path checks within the project where optional external dependencies are not required
+- YAML config syntax validation
+- registry key validation
+- file existence checks for project files only
+- `grep` or `rg` checks for old names, deprecated imports, and WorldLens-style APIs
+
+If an import check fails because of an optional external package, classify it as:
+- `environment/runtime dependency not available in local workspace`
+
+When reporting validation results, separate:
+1. project dependency issues
+2. config/schema issues
+3. environment/runtime dependency limitations
+
+Do not propose environment setup unless explicitly asked.

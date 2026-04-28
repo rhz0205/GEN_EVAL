@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-@dataclass(slots=True)
+@dataclass
 class ObjectTrack:
     object_id: str
     category: str
@@ -29,7 +29,7 @@ class ObjectTrack:
         }
 
 
-@dataclass(slots=True)
+@dataclass
 class GenerationSample:
     sample_id: str
     generated_video: str

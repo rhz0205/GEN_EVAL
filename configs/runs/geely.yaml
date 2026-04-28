@@ -1,0 +1,8 @@
+dataset: geely_data
+metrics:
+  - view_consistency
+  - temporal_consistency
+  - appearance_consistency
+  - depth_consistency
+runtime:
+  device: cuda

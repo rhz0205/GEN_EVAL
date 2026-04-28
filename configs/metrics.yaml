@@ -1,0 +1,47 @@
+view_consistency:
+  enabled: true
+  repo_path: /ABS/PATH/TO/LoFTR
+  weight_path: /ABS/PATH/TO/loftr.ckpt
+  num_frames: 3
+  resize:
+    - 640
+    - 480
+  crop_ratio: 1.0
+  conf_threshold: 0.0
+  target_matches: 200
+  save_visualizations: false
+
+temporal_consistency:
+  enabled: true
+  weight_path: /ABS/PATH/TO/ViT-B-32.pt
+  num_frames: 8
+  batch_size: 16
+
+appearance_consistency:
+  enabled: true
+  repo_path: /ABS/PATH/TO/dino
+  weight_path: /ABS/PATH/TO/dino_vitbase16_pretrain.pth
+  num_frames: 8
+  batch_size: 16
+
+depth_consistency:
+  enabled: true
+  repo_path: /di/group/renhongze/GEN_EVAL/src
+  weight_path: /ABS/PATH/TO/pretrained_models/depth
+  model_path: /ABS/PATH/TO/pretrained_models/dinov2
+  num_frames: 8
+  target_fps: 12
+  max_res: 400
+  input_size: 400
+  target_size:
+    - 450
+    - 800
+  batch_size: 16
+  depth_l2_scale: 1.0
+  save_visualizations: false
+
+semantic_consistency:
+  enabled: false
+
+instance_consistency:
+  enabled: false

@@ -4,13 +4,11 @@ import math
 from collections import defaultdict
 from typing import Any
 
-import numpy as np
-
 from gen_eval.schemas import GenerationSample, ObjectTrack
 
 
-class ObjectCoherenceMetric:
-    name = "object_coherence"
+class InstanceConsistencyMetric:
+    name = "instance_consistency"
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
@@ -30,6 +28,16 @@ class ObjectCoherenceMetric:
         self.geometry_weight = float(config.get("geometry_weight", 0.3))
 
     def evaluate(self, samples: list[GenerationSample]) -> dict[str, Any]:
+        numpy_status = self._ensure_numpy()
+        if numpy_status is not None:
+            return self._result(
+                score=None,
+                num_samples=0,
+                details={"evaluated_samples": [], "skipped_samples": [], "failed_samples": []},
+                status="skipped",
+                reason=numpy_status,
+            )
+
         evaluated_samples = []
         skipped_samples = []
         failed_samples = []
@@ -79,14 +87,14 @@ class ObjectCoherenceMetric:
 
         num_samples = len(evaluated_samples)
         averages = {
-            "object_coherence": total_score / num_samples,
+            "instance_consistency": total_score / num_samples,
             "feature_consistency": total_feature / num_samples,
             "class_stability": total_class / num_samples,
             "confidence_stability": total_confidence / num_samples,
             "geometry_coherence": total_geometry / num_samples,
         }
         return self._result(
-            score=averages["object_coherence"],
+            score=averages["instance_consistency"],
             num_samples=num_samples,
             details={
                 "average_results": averages,
@@ -464,8 +472,16 @@ class ObjectCoherenceMetric:
             result["reason"] = reason
         return result
 
+    def _ensure_numpy(self) -> str | None:
+        try:
+            global np
+            import numpy as np  # type: ignore
+        except Exception as exc:
+            return f"Required scoring dependency is unavailable: {exc}"
+        return None
 
-ObjectCoherence = ObjectCoherenceMetric
+
+InstanceConsistency = InstanceConsistencyMetric
 
 
 class _SkipSample(Exception):
