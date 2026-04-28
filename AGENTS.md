@@ -1,225 +1,107 @@
-GEN_EVAL project rules:
+## Project Rules
 
-GEN_EVAL is a lightweight, manifest-driven, offline evaluation toolkit for multi-view autonomous-driving generated videos. It should stay practical and flat, and must not drift back into WorldLens-style engineering.
-
-Hard constraints:
-- Do not reintroduce WorldLens-style `method_name/generated_results/video_submission/__call__` APIs.
-- Do not use `worldbench.utils.common` or `video_relative` in `src/gen_eval`.
-- Do not use online downloads such as `git clone`, `wget`, or model fetch scripts.
-- Do not install packages.
-- Do not modify `pretrained_models` content.
-- Do not run full-scale evaluations unless explicitly requested.
-- Do not add `--dry-run` or similar check-only CLI modes unless explicitly requested.
-- Metrics must expose `evaluate(samples) -> dict`.
-- Inputs must be manifest-driven.
-- Model paths must be local and configurable.
-- If a dependency, model, or local path is missing, return skipped/failed instead of crashing the whole evaluation.
-
-Current canonical dataset groups:
-- `sample_data`
-- `geely_data`
-- `cosmos_data`
-- `real_data`
-
-Do not use `debug` as a dataset group name.
-
-Current canonical metric names:
-- `view_consistency`
-- `temporal_consistency`
-- `appearance_consistency`
-- `depth_consistency`
-- `semantic_consistency`
-- `instance_consistency`
-
-Current preferred project layout:
-
-```text
-configs/
-  datasets/
-  metrics.yaml
-  runs/
-
-manifests/
-
-outputs/
-  sample_data/
-  geely_data/
-  cosmos_data/
-  real_data/
-
-pretrained_models/
-
-scripts/
-  evaluate.py
-  manifest_from_pkl.py
-  inspect_manifest.py
-  summarize_results.py
-
-src/gen_eval/
-  __init__.py
-  config.py
-  dataset.py
-  evaluator.py
-  execution.py
-  manifest_builder.py
-  registry.py
-  result_summary.py
-  result_writer.py
-  schemas.py
-  metrics/
-  models/
-  third_party/
-```
-
-Package responsibilities:
-- `scripts/`: thin CLI entrypoints only
-- `src/gen_eval/config.py`: YAML loading and run-config resolution
-- `src/gen_eval/dataset.py`: manifest loading and lightweight manifest inspection helpers
-- `src/gen_eval/evaluator.py`: runs enabled metrics
-- `src/gen_eval/execution.py`: lightweight execution backend selection and orchestration
-- `src/gen_eval/manifest_builder.py`: reusable manifest generation helpers
-- `src/gen_eval/registry.py`: maps canonical metric names to metric classes
-- `src/gen_eval/result_summary.py`: reusable result summary formatting
-- `src/gen_eval/result_writer.py`: result JSON writing and output path helpers
-- `src/gen_eval/schemas.py`: sample schema
-- `src/gen_eval/metrics/`: metric implementations
-- `src/gen_eval/models/`: lightweight model adapters used by metrics
-- `src/gen_eval/third_party/`: vendored third-party source code only
-- `pretrained_models/`: local pretrained weights and checkpoints
-
-Boundary rules:
-- Do not place model weights under `src/gen_eval/models/`.
-- Do not place checkpoints under `src/gen_eval/third_party/`.
-- Keep files like `.pth`, `.ckpt`, `.bin`, `.onnx`, and `.safetensors` under `pretrained_models/` or another explicit non-source local path.
-- Keep metric-specific loading logic inside each metric module unless there is a clear need for a tiny reusable adapter.
-- Keep Ray-specific logic isolated in `src/gen_eval/execution.py`.
-- Local execution must remain the default.
-- Ray support must remain optional and must not become a hard dependency for local runs.
-- Runtime config should stay simple inside existing run configs.
-- Do not create separate Ray config files such as `sample_ray.yaml` unless explicitly requested.
-- Do not embed Ray cluster startup scripts or long Rancher/Volcano/Kubernetes YAML into GEN_EVAL core code.
-- Do not rewrite metric implementations just to support Ray execution.
-- Metric results should stay dict-like and stable across backends.
-- Preferred metric result keys are: `metric`, `score`, `num_samples`, `details`, `status`, and optional `reason`.
-
-Keep metric-specific logic local when practical:
-- LoFTR logic inside `view_consistency.py`
-- CLIP logic inside `temporal_consistency.py`
-- DINO logic inside `appearance_consistency.py`
-- Video-Depth-Anything / DINOv2 logic inside `depth_consistency.py`
-
-Keep the project lightweight:
-- Do not introduce deep package layering unless explicitly requested.
-- Do not create a `backbone/` directory.
-- Do not expand `src/gen_eval/utils/` into a large helper tree.
-- Prefer small reusable functions over framework-like abstractions.
-
-Config rules:
-
-Dataset config schema:
-
-```yaml
-dataset_name: sample_data
-manifest_path: manifests/sample.json
-description: Small-batch sample dataset for fast metric validation.
-default_output_dir: outputs/sample_data
-```
-
-Metric config rules:
-- use one merged `configs/metrics.yaml`
-- top-level keys are canonical metric names
-- keep only practical user-facing fields
-- do not require:
-  - `mode`
-  - `backend`
-  - `device`
-  - `score_key`
-  - `use_all_views`
-
-Run config schema:
-
-```yaml
-dataset: sample_data
-metrics:
-  - view_consistency
-  - temporal_consistency
-  - appearance_consistency
-  - depth_consistency
-runtime:
-  device: cuda
-```
-
-Run config inference rules:
-- `run_name` comes from the run config filename stem
-- `dataset_config_path` resolves to `configs/datasets/{dataset}.yaml`
-- `metric_config_path` is always `configs/metrics.yaml`
-- `output_dir` resolves to `outputs/{dataset_name}/{run_name}`
-- `save_details` defaults to `true`
-
-Naming rules:
-- manifest filenames under `manifests/` must not add `_manifest`
-- run names must not use `_all`
-- output naming is `outputs/{dataset_name}/{run_name}/{timestamp}`
-
-Dependency-checking scope rules:
-
-Codex should focus on repository-internal correctness:
-- whether `src/gen_eval` modules import each other correctly
-- whether canonical metric modules are referenced correctly
-- whether registry mappings are consistent
-- whether config metric keys match registered metric names
-- whether scripts import project modules correctly
-
-Codex must not treat missing local runtime dependencies as project errors unless they are caused by project imports.
-Codex must not assume the local workspace has real datasets, manifests, videos,
-pretrained weights, CUDA, or a running Ray cluster.
-
-Do not report these as code problems by default:
-- missing `torch`
-- missing `torchvision`
-- missing `numpy`
-- missing `scipy`
-- missing `skimage`
-- missing `cv2`
-- missing `PIL`
-- missing `clip`
-- missing `open_clip`
-- missing `transformers`
-- missing `LoFTR`
-- missing `DINO`
-- missing `DINOv2`
-- missing `Video-Depth-Anything`
-- missing `xFormers`
-- missing `CUDA`
-- missing `PyYAML`
-- missing local model weights
-- invalid local absolute weight paths
-- unavailable `pretrained_models` content
-
-Allowed checks:
-- static import/path checks within the project
-- YAML config syntax validation
-- registry key validation
-- file existence checks for project files only
-- grep/rg checks for old names, deprecated imports, and WorldLens-style APIs
-
-If an import or execution check fails because of an optional external package, classify it as:
-- `environment/runtime dependency not available in local workspace`
-
-When reporting validation results, separate:
-1. project dependency issues
-2. config/schema issues
-3. environment/runtime dependency limitations
-
-Do not propose environment setup unless explicitly asked.
-Prefer static validation and CLI help checks on the local machine. Treat real
-evaluation and cluster debugging as remote-environment tasks unless the user
-explicitly provides local data and asks to run them.
-
-Output rules:
-- Keep the default output layout lightweight and stable.
-- Default run output should use `outputs/{dataset_name}/{run_name}/{timestamp}/`.
-- Each run should write simple files such as `result.json` and `summary.txt`.
-- Keep a text-based `latest.txt` marker instead of symlinks.
-- Preserve no-data local checkability while keeping the output format simple.
-- Do not replace this with MLflow, W&B, databases, dashboards, or other heavy experiment managers unless explicitly requested.
+1. `worldbench` is an offline evaluation framework for generated autonomous-driving videos.
+2. It is not a training framework, not a heavy experiment-management platform, and not a dashboard system.
+3. The canonical workflow is:
+   data list
+   -> dataset normalization
+   -> reference data generation
+   -> multi-dimensional evaluation modules
+   -> result summarization
+   -> visualization outputs
+4. The only canonical config files are:
+   `configs/dataset.yaml`
+   `configs/metrics.yaml`
+   `configs/reference.yaml`
+   `configs/run.yaml`
+5. Canonical dataset names are:
+   `cosmos`
+   `geely`
+   `real`
+   `sample`
+6. Data file naming rule:
+   `data/{dataset_name}_{data_count}_{timestamp}.json`
+7. Output directory rule:
+   `outputs/{dataset_name}/{data_count}_{timestamp}/`
+8. Output layout:
+   `results/`
+   `logs/`
+   `visualizations/`
+9. Visualization folders under `visualizations/` must be exactly:
+   `depth_raw`
+   `semantic_raw`
+   `multiview_match_raw`
+   `depth_6v_image`
+   `semantic_6v_image`
+   `multiview_match_6v_image`
+   `depth_6v_video`
+   `semantic_6v_video`
+   `multiview_match_6v_video`
+10. Do not create `src/gen_eval/`.
+11. Do not create `src/gen_eval/metrics/`.
+12. All metric implementations belong in `src/modules/`.
+13. Modules must contain real implementations, not wrappers around any metrics package.
+14. Do not introduce `XXXMetric` legacy class names in the final structure.
+15. Use concise class names:
+    `VideoIntegrity`
+    `TemporalConsistency`
+    `AppearanceConsistency`
+    `DepthConsistency`
+    `SemanticConsistency`
+    `InstanceConsistency`
+    `ViewConsistency`
+16. The dataset layer belongs under `src/dataset/`.
+17. Do not create `src/gen_eval/dataset.py`.
+18. Do not create `src/gen_eval/reference.py`.
+19. The reference layer belongs under `src/reference/`.
+20. The orchestration layer belongs under `src/models/`.
+21. The visualization layer belongs under `src/visualization/`.
+22. Shared schemas belong in `src/schemas.py`.
+23. Do not create old `src/gen_eval/evaluator.py`, `src/gen_eval/execution.py`, or `src/gen_eval/registry.py`.
+24. Scripts should be thin CLI entrypoints.
+25. Scripts should add the project `src/` directory to `sys.path` when needed.
+26. Scripts should import from the flat packages, for example:
+    `from schemas import GenerationSample`
+    `from dataset import build_dataset`
+    `from modules import build_module`
+    `from reference import ReferencePreparer`
+    `from models import GenEval`
+27. Do not use imports like:
+    `from gen_eval.dataset import ...`
+    `from gen_eval.modules import ...`
+    `from gen_eval.reference import ...`
+    `from gen_eval.models import ...`
+28. Core logic should live under `src/`.
+29. The reference layer should generate reference files before metric evaluation.
+30. OpenSeeD should be part of the reference layer, not `semantic_consistency.py`.
+31. `semantic_consistency.py` should only read prepared semantic masks.
+32. OpenSeeD semantic reference protocol:
+    `metadata.semantic_masks`
+    `metadata.semantic_num_classes`
+    `metadata.semantic_ignore_label`
+33. Use `ignore_label = -1` for ignored semantic pixels.
+34. For semantic consistency, fixed weights are:
+    `S_SemC = 0.5 * S_LFR + 0.4 * S_SAC + 0.1 * S_CDS`
+35. For no-reference temporal or appearance consistency, preferred aggregation is:
+    `score = ACM / (1 + TJI)`
+36. Do not change metric formulas unless explicitly requested.
+37. Config field names should be unified:
+    `weight_path`
+    `repo_path`
+    `model_path`
+    `config_path`
+    `device`
+    `batch_size`
+38. Avoid legacy config aliases unless explicitly needed.
+39. Comments should be minimal.
+40. If comments are necessary, use Chinese block-level comments.
+41. Do not add unnecessary English implementation docstrings.
+42. Do not add redundant comments such as:
+    `# type: ignore`
+    `# noqa: BLE001`
+    `# type: ignore[assignment]`
+43. Future Codex tasks should:
+    - inspect old source only as reference
+    - write only into `D:\Project\worldbench`
+    - make limited changes
+    - report touched files, risks, and validation commands

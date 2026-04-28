@@ -1,85 +1,42 @@
-continue_on_error: false
-error_key: reference_errors
-
-reference_generators:
-  - name: openseed_semantics
-    enabled: true
-
-    camera_videos_key: camera_videos
-    output_key: semantic_masks
-    num_classes_key: semantic_num_classes
-
-    repo_path: third_party/OpenSeeD
-    config_path: third_party/OpenSeeD/configs/openseed/openseed_swint_lang.yaml
-    weight_path: pretrained_models/segmentation/model_state_dict_swint_51.2ap.pt
-
-    device: cuda
-    score_threshold: 0.3
-    ignore_label: -1
-
-    vocabulary:
-      - road
-      - lane marking
-      - sidewalk
-      - vehicle
-      - car
-      - truck
-      - bus
-      - pedestrian
-      - cyclist
-      - traffic light
-      - traffic sign
-      - building
-      - vegetation
-      - sky
-      - pole
-      - barrier
-
-    expected_camera_views:
-      - camera_front
-      - camera_cross_left
-      - camera_cross_right
-      - camera_rear_left
-      - camera_rear_right
-      - camera_rear
-
-    strict_views: false
-    force: false
-    frame_stride: 1
-    max_frames:
-
-  - name: depth_reference
-    enabled: false
-
-    camera_videos_key: camera_videos
-    output_key: depth_maps
-    model_name: video_depth_anything
-    weight_path: pretrained_models/depth/metric_video_depth_anything_vits.pth
-    encoder: vits
-    device: cuda
-    force: false
-
-  - name: object_tracks
-    enabled: false
-
-    camera_videos_key: camera_videos
-    output_key: object_tracks
-    detector_name: placeholder_detector
-    tracker_name: placeholder_tracker
-    classes:
-      - vehicle
-      - pedestrian
-      - cyclist
-    device: cuda
-    force: false
-
-  - name: planning_response
-    enabled: false
-
-    scenario_key: scenario
-    output_key: planning_response
-    planner_name: placeholder_planner
-    checkpoint_path:
-    horizon_seconds: 8.0
-    frequency_hz: 10
-    force: false
+reference:
+  enabled: true
+  continue_on_error: false
+  generators:
+    openseed_semantic:
+      enabled: true
+      class_name: OpenSeeDReference
+      input_key: camera_videos
+      output_key: semantic_masks
+      num_classes_key: semantic_num_classes
+      ignore_label_key: semantic_ignore_label
+      repo_path: src/third_party/OpenSeeD
+      config_path: src/third_party/OpenSeeD/configs/openseed/openseed_swint_lang.yaml
+      weight_path: pretrained_models/segmentation/model_state_dict_swint_51.2ap.pt
+      device: cuda
+      force: false
+      vocabulary:
+        - road
+        - lane marking
+        - sidewalk
+        - vehicle
+        - car
+        - truck
+        - bus
+        - pedestrian
+        - cyclist
+        - traffic light
+        - traffic sign
+        - building
+        - vegetation
+        - sky
+        - pole
+        - barrier
+    depth_reference:
+      enabled: false
+      class_name: DepthReference
+    object_tracks:
+      enabled: false
+      class_name: ObjectTrackReference
+    planning_response:
+      enabled: false
+      class_name: PlanningResponseReference

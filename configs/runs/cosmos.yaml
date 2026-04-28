@@ -1,9 +1,0 @@
-dataset: cosmos_data
-metrics:
-  - video_integrity
-  - view_consistency
-  - temporal_consistency
-  - appearance_consistency
-  - depth_consistency
-runtime:
-  device: cuda

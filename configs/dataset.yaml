@@ -1,0 +1,45 @@
+datasets:
+  cosmos:
+    class_name: CosmosDataset
+    data_file: data/cosmos_1000_202604280811.json
+    camera_videos_key: camera_videos
+    expected_camera_views:
+      - camera_front
+      - camera_cross_left
+      - camera_cross_right
+      - camera_rear_left
+      - camera_rear_right
+      - camera_rear
+  geely:
+    class_name: GeelyDataset
+    data_file: data/geely_500_202604280811.json
+    camera_videos_key: camera_videos
+    expected_camera_views:
+      - camera_front
+      - camera_cross_left
+      - camera_cross_right
+      - camera_rear_left
+      - camera_rear_right
+      - camera_rear
+  real:
+    class_name: RealDataset
+    data_file: data/real_500_202604280811.json
+    camera_videos_key: camera_videos
+    expected_camera_views:
+      - camera_front
+      - camera_cross_left
+      - camera_cross_right
+      - camera_rear_left
+      - camera_rear_right
+      - camera_rear
+  sample:
+    class_name: SampleDataset
+    data_file: data/sample_20_202604280811.json
+    camera_videos_key: camera_videos
+    expected_camera_views:
+      - camera_front
+      - camera_cross_left
+      - camera_cross_right
+      - camera_rear_left
+      - camera_rear_right
+      - camera_rear

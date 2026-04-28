@@ -1,0 +1,19 @@
+run:
+  dataset_name: sample
+  data_count: 20
+  timestamp: "202604280811"
+  paths:
+    data_file: data/sample_20_202604280811.json
+    output_dir: outputs/sample/20_202604280811
+  stages:
+    inspect_data: true
+    prepare_reference: true
+    evaluate: true
+    summarize: true
+    visualize: false
+  runtime:
+    device: cuda
+    parallel: false
+    num_workers: 4
+  logging:
+    level: INFO
