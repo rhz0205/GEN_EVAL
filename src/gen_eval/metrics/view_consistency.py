@@ -105,7 +105,9 @@ class ViewConsistencyMetric:
             "metric": self.name,
             "status": status,
             "num_samples": len(samples),
+            "valid_sample_count": len(valid_scores),
             "valid_evaluated_count": len(valid_scores),
+            "mean_view_consistency_score": view_consistency_score,
             "view_consistency_score": view_consistency_score,
             "details": {
                 "evaluated_samples": evaluated_samples,

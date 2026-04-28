@@ -16,14 +16,12 @@ view_consistency:
 temporal_consistency:
   enabled: true
   weight_path: /ABS/PATH/TO/ViT-B-32.pt
-  num_frames: 8
   batch_size: 16
 
 appearance_consistency:
   enabled: true
   repo_path: /ABS/PATH/TO/dino
   weight_path: /ABS/PATH/TO/dino_vitbase16_pretrain.pth
-  num_frames: 8
   batch_size: 16
 
 depth_consistency:
@@ -31,7 +29,6 @@ depth_consistency:
   repo_path: /di/group/renhongze/GEN_EVAL/src
   weight_path: /ABS/PATH/TO/pretrained_models/depth
   model_path: /ABS/PATH/TO/pretrained_models/dinov2
-  num_frames: 8
   target_fps: 12
   max_res: 400
   input_size: 400
@@ -40,7 +37,6 @@ depth_consistency:
     - 800
   batch_size: 16
   depth_l2_scale: 1.0
-  save_visualizations: false
 
 semantic_consistency:
   enabled: false

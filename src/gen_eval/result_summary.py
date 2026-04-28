@@ -55,6 +55,93 @@ def _format_number(value: Any) -> str:
     return str(value)
 
 
+def _numeric_or_none(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _get_valid_count(metric_result: dict[str, Any]) -> int | None:
+    valid_sample_count = metric_result.get("valid_sample_count")
+    if isinstance(valid_sample_count, int):
+        return valid_sample_count
+    num_samples = metric_result.get("num_samples")
+    if isinstance(num_samples, int):
+        return num_samples
+    return None
+
+
+def _get_display_metric_fields(metric_result: dict[str, Any]) -> list[tuple[str, Any]]:
+    metric_name = str(metric_result.get("metric") or "")
+    score = _numeric_or_none(metric_result.get("score"))
+    if score is not None:
+        return [("score", score)]
+
+    if metric_name == "video_integrity":
+        fields: list[tuple[str, Any]] = []
+        pass_rate = _numeric_or_none(
+            metric_result.get("pass_rate")
+            or metric_result.get("video_integrity_pass_rate")
+        )
+        if pass_rate is not None:
+            fields.append(("pass_rate", pass_rate))
+        valid_sample_count = metric_result.get("valid_sample_count")
+        if isinstance(valid_sample_count, int):
+            fields.append(("valid", valid_sample_count))
+        invalid_sample_count = metric_result.get("invalid_sample_count")
+        if isinstance(invalid_sample_count, int):
+            fields.append(("invalid", invalid_sample_count))
+        return fields
+
+    preferred_named_fields = [
+        "mean_view_consistency_score",
+        "mean_temporal_consistency_score",
+        "mean_appearance_consistency_score",
+        "mean_depth_consistency_score",
+        "mean_semantic_consistency_score",
+        "mean_instance_consistency_score",
+    ]
+    for field_name in preferred_named_fields:
+        value = _numeric_or_none(metric_result.get(field_name))
+        if value is not None:
+            fields = [(field_name, value)]
+            valid_count = metric_result.get("valid_sample_count")
+            if isinstance(valid_count, int):
+                fields.append(("valid", valid_count))
+            return fields
+
+    for key, value in metric_result.items():
+        if not isinstance(key, str):
+            continue
+        if key.startswith("mean_") and key.endswith("_score"):
+            numeric_value = _numeric_or_none(value)
+            if numeric_value is not None:
+                fields = [(key, numeric_value)]
+                valid_count = metric_result.get("valid_sample_count")
+                if isinstance(valid_count, int):
+                    fields.append(("valid", valid_count))
+                return fields
+
+    valid_count = metric_result.get("valid_sample_count")
+    if isinstance(valid_count, int):
+        return [("valid", valid_count)]
+    return []
+
+
+def _format_metric_display(metric_result: dict[str, Any]) -> str:
+    metric = metric_result.get("metric")
+    status = metric_result.get("status")
+    fields = _get_display_metric_fields(metric_result)
+    parts = [f"- metric={metric}", f"status={status}"]
+    for key, value in fields:
+        parts.append(f"{key}={_format_number(value)}")
+
+    num_samples = metric_result.get("num_samples")
+    if num_samples is not None:
+        parts.append(f"num_samples={_format_number(num_samples)}")
+    return " ".join(parts)
+
+
 def _get_list(mapping: dict[str, Any], key: str) -> list[Any]:
     value = mapping.get(key)
     return value if isinstance(value, list) else []
@@ -166,10 +253,6 @@ def summarize_pair_data(evaluated_samples: list[dict[str, Any]]) -> list[str]:
 
 
 def summarize_metric(metric_result: dict[str, Any]) -> list[str]:
-    metric = metric_result.get("metric")
-    status = metric_result.get("status")
-    score = metric_result.get("score")
-    num_samples = metric_result.get("num_samples")
     reason = metric_result.get("reason")
     details = metric_result.get("details")
     details = details if isinstance(details, dict) else {}
@@ -183,8 +266,8 @@ def summarize_metric(metric_result: dict[str, Any]) -> list[str]:
     failed_samples = _get_list(details, "failed_samples")
 
     lines = [
-        f"- metric={metric} status={status} score={_format_number(score)} "
-        f"num_samples={_format_number(num_samples)} skipped={len(skipped_samples)} failed={len(failed_samples)}"
+        f"{_format_metric_display(metric_result)} "
+        f"skipped={len(skipped_samples)} failed={len(failed_samples)}"
     ]
     if reason:
         lines.append(f"  reason: {reason}")

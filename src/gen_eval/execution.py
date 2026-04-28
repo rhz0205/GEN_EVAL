@@ -7,7 +7,12 @@ from typing import Any
 from gen_eval.dataset import load_manifest
 from gen_eval.evaluator import (
     Evaluator,
+    VIDEO_INTEGRITY_METRIC,
+    apply_video_integrity_gate,
+    build_gated_metric_result,
+    build_video_integrity_gate,
     iter_enabled_metrics,
+    is_quality_metric,
     normalize_metric_result,
     run_metric,
 )
@@ -67,7 +72,6 @@ def _run_ray(config: dict[str, Any]) -> dict[str, Any]:
     manifest_path = config["manifest_path"]
     samples = load_manifest(manifest_path)
     sample_payloads = [sample.to_dict() for sample in samples]
-    sample_shards = _split_into_shards(sample_payloads, shard_size)
 
     def evaluate_shard(
         metric_name: str,
@@ -89,10 +93,33 @@ def _run_ray(config: dict[str, Any]) -> dict[str, Any]:
     )(evaluate_shard)
 
     results = []
-    effective_max_in_flight = max_in_flight or max(1, len(sample_shards))
+    initial_shard_count = max(1, len(_split_into_shards(sample_payloads, shard_size)))
+    effective_max_in_flight = max_in_flight or initial_shard_count
+    enabled_metrics = iter_enabled_metrics(config.get("metrics", {}))
+    video_integrity_gate: dict[str, Any] | None = None
 
-    for metric_name, metric_config in iter_enabled_metrics(config.get("metrics", {})):
+    for metric_name, metric_config in enabled_metrics:
+        metric_payloads = sample_payloads
+        if video_integrity_gate is not None and is_quality_metric(metric_name):
+            valid_sample_ids = set(video_integrity_gate["valid_sample_ids"])
+            metric_payloads = [
+                payload
+                for payload in sample_payloads
+                if str(payload.get("sample_id") or "unknown") in valid_sample_ids
+            ]
+
+        sample_shards = _split_into_shards(metric_payloads, shard_size) if metric_payloads else []
+
         if not sample_shards:
+            if video_integrity_gate is not None and is_quality_metric(metric_name):
+                results.append(
+                    build_gated_metric_result(
+                        metric_name,
+                        total_samples=len(sample_payloads),
+                        invalid_sample_ids=list(video_integrity_gate["invalid_sample_ids"]),
+                    )
+                )
+                continue
             results.append(run_metric(metric_name, metric_config, []))
             continue
 
@@ -101,8 +128,27 @@ def _run_ray(config: dict[str, Any]) -> dict[str, Any]:
             for shard in sample_shards
         ]
         partials = _ray_gather_limited(ray, pending, effective_max_in_flight)
+        merged_result = _merge_metric_results(metric_name, partials, len(metric_payloads))
+        if metric_name == VIDEO_INTEGRITY_METRIC:
+            sample_id_payloads = [
+                _SamplePayloadProxy(payload) for payload in sample_payloads
+            ]
+            video_integrity_gate = build_video_integrity_gate(
+                sample_id_payloads,
+                merged_result,
+            )
+            results.append(merged_result)
+            continue
+
+        if video_integrity_gate is not None and is_quality_metric(metric_name):
+            merged_result = apply_video_integrity_gate(
+                metric_name,
+                merged_result,
+                total_samples=len(sample_payloads),
+                invalid_sample_ids=list(video_integrity_gate["invalid_sample_ids"]),
+            )
         results.append(
-            _merge_metric_results(metric_name, partials, len(sample_payloads))
+            merged_result
         )
 
     return {
@@ -256,8 +302,12 @@ def _merge_scoreless_metric_results(
 ) -> dict[str, Any] | None:
     if metric_name == "video_integrity":
         return _merge_video_integrity_results(partial_results, total_samples)
-    if metric_name == "view_consistency":
-        return _merge_view_consistency_results(partial_results, total_samples)
+    if is_quality_metric(metric_name):
+        return _merge_named_score_metric_results(
+            metric_name,
+            partial_results,
+            total_samples,
+        )
     return None
 
 
@@ -310,12 +360,18 @@ def _merge_video_integrity_results(
     return result
 
 
-def _merge_view_consistency_results(
+def _merge_named_score_metric_results(
+    metric_name: str,
     partial_results: list[dict[str, Any]],
     total_samples: int,
 ) -> dict[str, Any]:
+    from gen_eval.evaluator import (
+        get_quality_metric_mean_field,
+        get_quality_metric_mean_source_field,
+    )
+
     normalized_partials = [
-        normalize_metric_result("view_consistency", partial) for partial in partial_results
+        normalize_metric_result(metric_name, partial) for partial in partial_results
     ]
     details = _merge_detail_lists(normalized_partials, total_samples)
     failed = sum(1 for partial in normalized_partials if partial.get("status") == "failed")
@@ -325,13 +381,20 @@ def _merge_view_consistency_results(
         if isinstance(partial.get("reason"), str) and partial.get("reason")
     ]
 
+    mean_field = get_quality_metric_mean_field(metric_name)
+    mean_source_field = get_quality_metric_mean_source_field(metric_name)
+    if mean_field is None or mean_source_field is None:
+        raise KeyError(f"Unsupported scoreless metric merge: {metric_name}")
+
     weighted_sum = 0.0
     valid_evaluated_count = 0
     for partial in normalized_partials:
         if partial.get("status") != "success":
             continue
-        score = partial.get("view_consistency_score")
-        count = partial.get("valid_evaluated_count")
+        score = partial.get(mean_source_field)
+        count = partial.get("valid_sample_count")
+        if not isinstance(count, int):
+            count = partial.get("valid_evaluated_count")
         if (
             isinstance(score, (int, float))
             and math.isfinite(float(score))
@@ -344,24 +407,27 @@ def _merge_view_consistency_results(
     if valid_evaluated_count > 0:
         status = "success"
         reason = None
-        view_consistency_score = weighted_sum / valid_evaluated_count
+        mean_score = weighted_sum / valid_evaluated_count
     else:
         status = "failed" if failed else "skipped"
         reason = (
             reasons[0]
             if reasons
-            else "No sample produced a valid view_consistency_score."
+            else f"No sample produced a valid {mean_field}."
         )
-        view_consistency_score = None
+        mean_score = None
 
     result: dict[str, Any] = {
-        "metric": "view_consistency",
+        "metric": metric_name,
         "status": status,
         "num_samples": total_samples,
-        "valid_evaluated_count": valid_evaluated_count,
-        "view_consistency_score": view_consistency_score,
+        "valid_sample_count": valid_evaluated_count,
+        mean_field: mean_score,
         "details": details,
     }
+    if metric_name == "view_consistency":
+        result["view_consistency_score"] = mean_score
+        result["valid_evaluated_count"] = valid_evaluated_count
     if reason:
         result["reason"] = reason
     return result
@@ -390,6 +456,11 @@ def _merge_detail_lists(
         detail_payload["failed_samples"] = []
     detail_payload["total_samples_seen"] = total_samples
     return detail_payload
+
+
+class _SamplePayloadProxy:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.sample_id = payload.get("sample_id") or "unknown"
 
 
 def _coerce_positive_int(value: Any) -> int | None:

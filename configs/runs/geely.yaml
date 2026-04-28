@@ -1,5 +1,6 @@
 dataset: geely_data
 metrics:
+  - video_integrity
   - view_consistency
   - temporal_consistency
   - appearance_consistency

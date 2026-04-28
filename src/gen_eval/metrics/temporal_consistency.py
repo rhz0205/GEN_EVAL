@@ -1,4 +1,4 @@
-"""CLIP-based temporal consistency metric."""
+"""CLIP-based temporal consistency metric for fixed multi-view videos."""
 
 from __future__ import annotations
 
@@ -6,53 +6,32 @@ import math
 from pathlib import Path
 from typing import Any
 
+EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
+    "camera_front",
+    "camera_cross_left",
+    "camera_cross_right",
+    "camera_rear_left",
+    "camera_rear_right",
+    "camera_rear",
+)
+
+
 class TemporalConsistencyMetric:
-    """Measure frame-to-frame temporal stability from sampled embeddings."""
+    """Measure CLIP-based temporal stability across fixed driving-camera views."""
 
     name = "temporal_consistency"
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config = config or {}
-
-        # Current recommended mode for your data.
-        # "self": evaluate generated videos without reference_video.
-        self.mode = self.config.get("mode", "self")
-
-        # Runtime / model settings.
+        self.camera_videos_key = self.config.get("camera_videos_key", "camera_videos")
         self.device = self.config.get("device", "cuda")
         self.weight_path = (
             self.config.get("weight_path")
             or self.config.get("clip_weight_path")
             or self.config.get("local_save_path")
         )
-
-        # Only used if explicitly allowed. This may trigger CLIP cache/download
-        # behavior depending on the installed clip package, so it is disabled by
-        # default for offline servers.
-        self.clip_model_name = self.config.get("clip_model_name", "ViT-B/32")
-        self.allow_clip_model_name = bool(self.config.get("allow_clip_model_name", False))
-
-        # Frame sampling.
-        self.num_frames = int(self.config.get("num_frames", 8))
-        self.frame_positions = self.config.get("frame_positions")
-        self.resize = int(self.config.get("resize", 224))
         self.batch_size = int(self.config.get("batch_size", 16))
 
-        # View handling.
-        # False: only sample.generated_video, usually camera_front.mp4.
-        # True: evaluate each video in metadata["camera_videos"] and average.
-        self.use_all_views = bool(self.config.get("use_all_views", True))
-        self.camera_videos_key = self.config.get("camera_videos_key", "camera_videos")
-        self.keep_front_tele = bool(self.config.get("keep_front_tele", False))
-        self.exclude_views = set(self.config.get("exclude_views", []))
-        if not self.keep_front_tele:
-            self.exclude_views.add("camera_front_tele")
-
-        # Score options.
-        self.score_key = self.config.get("score_key", "ts")
-        self.min_frames = int(self.config.get("min_frames", 3))
-
-        # Lazy runtime objects.
         self._torch = None
         self._clip = None
         self._cv2 = None
@@ -61,18 +40,19 @@ class TemporalConsistencyMetric:
         self._preprocess = None
 
     def evaluate(self, samples: list[Any]) -> dict[str, Any]:
-        """Evaluate temporal consistency over manifest samples."""
         evaluated_samples: list[dict[str, Any]] = []
-        valid_scores: list[float] = []
         skipped_samples: list[dict[str, Any]] = []
         failed_samples: list[dict[str, Any]] = []
+        valid_scores: list[float] = []
 
         runtime_status = self._ensure_clip()
         if runtime_status is not None:
             return {
                 "metric": self.name,
-                "score": None,
-                "num_samples": 0,
+                "status": "skipped",
+                "num_samples": len(samples),
+                "valid_sample_count": 0,
+                "mean_temporal_consistency_score": None,
                 "details": {
                     "evaluated_samples": [],
                     "skipped_samples": [
@@ -84,7 +64,6 @@ class TemporalConsistencyMetric:
                     ],
                     "failed_samples": [],
                 },
-                "status": "skipped",
                 "reason": runtime_status,
             }
 
@@ -92,34 +71,24 @@ class TemporalConsistencyMetric:
             sample_id = getattr(sample, "sample_id", None) or "unknown"
 
             try:
-                if self.mode != "self":
-                    sample_result = {
-                        "sample_id": sample_id,
-                        "metric": self.name,
-                        "mode": self.mode,
-                        "score": None,
-                        "status": "skipped",
-                        "reason": f"Unsupported temporal_consistency mode: {self.mode}",
-                    }
-                else:
-                    sample_result = self._evaluate_self_sample(sample)
-
+                sample_result = self._evaluate_sample(sample)
             except Exception as exc:  # noqa: BLE001
                 sample_result = {
                     "sample_id": sample_id,
-                    "metric": self.name,
-                    "mode": self.mode,
-                    "score": None,
                     "status": "failed",
                     "reason": f"{type(exc).__name__}: {exc}",
                 }
 
-            evaluated_samples.append(sample_result)
-
             status = sample_result.get("status")
-            score = sample_result.get("score")
+            score = sample_result.get("temporal_consistency_score")
 
-            if status == "success" and isinstance(score, (int, float)) and math.isfinite(float(score)):
+            if status == "success" and is_finite_number(score):
+                evaluated_samples.append(
+                    {
+                        "sample_id": sample_id,
+                        "temporal_consistency_score": float(score),
+                    }
+                )
                 valid_scores.append(float(score))
             elif status == "skipped":
                 skipped_samples.append(
@@ -136,79 +105,31 @@ class TemporalConsistencyMetric:
                     }
                 )
 
-        if valid_scores:
-            final_score = float(sum(valid_scores) / len(valid_scores))
+        mean_score = mean_or_none(valid_scores)
+        if mean_score is not None:
             status = "success"
             reason = None
         else:
-            final_score = None
-            status = "skipped" if not failed_samples else "failed"
-            reason = "No sample produced a valid temporal consistency score."
+            status = "failed" if failed_samples else "skipped"
+            reason = "No sample produced a valid temporal_consistency_score."
 
-        result = {
+        result: dict[str, Any] = {
             "metric": self.name,
-            "score": final_score,
-            "num_samples": len(valid_scores),
+            "status": status,
+            "num_samples": len(samples),
+            "valid_sample_count": len(valid_scores),
+            "mean_temporal_consistency_score": mean_score,
             "details": {
                 "evaluated_samples": evaluated_samples,
                 "skipped_samples": skipped_samples,
                 "failed_samples": failed_samples,
             },
-            "status": status,
         }
-
         if reason:
             result["reason"] = reason
-
         return result
 
-    # ------------------------------------------------------------------
-    # Sample-level evaluation
-    # ------------------------------------------------------------------
-
-    def _evaluate_self_sample(self, sample: Any) -> dict[str, Any]:
-        sample_id = getattr(sample, "sample_id", None) or "unknown"
-
-        if self.use_all_views:
-            return self._evaluate_all_views(sample)
-
-        video_path = getattr(sample, "generated_video", None)
-        if not video_path:
-            return {
-                "sample_id": sample_id,
-                "metric": self.name,
-                "mode": "self",
-                "score": None,
-                "status": "skipped",
-                "reason": "sample.generated_video is missing.",
-            }
-
-        video_result = self._evaluate_single_video(str(video_path))
-
-        if video_result.get("status") != "success":
-            return {
-                "sample_id": sample_id,
-                "metric": self.name,
-                "mode": "self",
-                "score": None,
-                "status": video_result.get("status", "skipped"),
-                "reason": video_result.get("reason", "single video evaluation failed"),
-                "video_result": video_result,
-            }
-
-        score = float(video_result.get(self.score_key, video_result.get("ts", 0.0)))
-
-        return {
-            "sample_id": sample_id,
-            "metric": self.name,
-            "mode": "self",
-            "score": score,
-            "status": "success",
-            "video_path": str(video_path),
-            "video_result": video_result,
-        }
-
-    def _evaluate_all_views(self, sample: Any) -> dict[str, Any]:
+    def _evaluate_sample(self, sample: Any) -> dict[str, Any]:
         sample_id = getattr(sample, "sample_id", None) or "unknown"
         metadata = getattr(sample, "metadata", None) or {}
         camera_videos = metadata.get(self.camera_videos_key)
@@ -216,187 +137,90 @@ class TemporalConsistencyMetric:
         if not isinstance(camera_videos, dict) or not camera_videos:
             return {
                 "sample_id": sample_id,
-                "metric": self.name,
-                "mode": "self",
-                "score": None,
                 "status": "skipped",
-                "reason": "metadata['camera_videos'] is required when use_all_views=true.",
+                "reason": "metadata['camera_videos'] is required and must be a non-empty dict.",
             }
 
-        view_results: dict[str, Any] = {}
+        normalized_videos = {
+            str(view): str(path) for view, path in camera_videos.items() if path is not None
+        }
+        missing_views = [
+            view for view in EXPECTED_CAMERA_VIEWS if view not in normalized_videos
+        ]
+        if missing_views:
+            return {
+                "sample_id": sample_id,
+                "status": "skipped",
+                "reason": f"Missing expected camera views: {', '.join(missing_views)}.",
+            }
+
         view_scores: list[float] = []
-
-        for view, path in sorted(camera_videos.items()):
-            view = str(view)
-            if view in self.exclude_views:
-                continue
-
-            result = self._evaluate_single_video(str(path))
-            view_results[view] = result
-
-            if (
-                result.get("status") == "success"
-                and isinstance(result.get(self.score_key, result.get("ts")), (int, float))
-            ):
-                score = float(result.get(self.score_key, result.get("ts")))
-                if math.isfinite(score):
-                    view_scores.append(score)
+        for view in EXPECTED_CAMERA_VIEWS:
+            view_score = self._evaluate_view_video(normalized_videos[view])
+            if is_finite_number(view_score):
+                view_scores.append(float(view_score))
 
         if not view_scores:
             return {
                 "sample_id": sample_id,
-                "metric": self.name,
-                "mode": "self",
-                "score": None,
                 "status": "skipped",
-                "reason": "No camera view produced a valid temporal consistency score.",
-                "view_results": view_results,
+                "reason": "No expected camera view produced a valid temporal consistency score.",
             }
-
-        score = float(sum(view_scores) / len(view_scores))
 
         return {
             "sample_id": sample_id,
-            "metric": self.name,
-            "mode": "self",
-            "score": score,
             "status": "success",
-            "num_views": len(view_scores),
-            "view_results": view_results,
+            "temporal_consistency_score": mean_or_none(view_scores),
         }
 
-    # ------------------------------------------------------------------
-    # Video-level evaluation
-    # ------------------------------------------------------------------
-
-    def _evaluate_single_video(self, video_path: str) -> dict[str, Any]:
+    def _evaluate_view_video(self, video_path: str) -> float | None:
         path = Path(video_path)
+        if not path.exists() or not path.is_file():
+            return None
 
-        if not path.exists():
-            return {
-                "video_path": video_path,
-                "status": "skipped",
-                "reason": "video path does not exist",
-            }
-
-        if not path.is_file():
-            return {
-                "video_path": video_path,
-                "status": "skipped",
-                "reason": "video path is not a file",
-            }
-
-        frame_indices = self._sample_frame_indices(video_path)
-        if len(frame_indices) < self.min_frames:
-            return {
-                "video_path": video_path,
-                "status": "skipped",
-                "reason": f"not enough sampled frames: {len(frame_indices)} < {self.min_frames}",
-                "sampled_frame_indices": frame_indices,
-            }
-
-        frames = []
-        valid_indices = []
-        for idx in frame_indices:
-            frame = self._read_frame(video_path, idx)
-            if frame is None:
-                continue
-            frames.append(frame)
-            valid_indices.append(idx)
-
-        if len(frames) < self.min_frames:
-            return {
-                "video_path": video_path,
-                "status": "skipped",
-                "reason": f"not enough readable frames: {len(frames)} < {self.min_frames}",
-                "sampled_frame_indices": frame_indices,
-                "readable_frame_indices": valid_indices,
-            }
+        frames = self._read_all_frames(video_path)
+        if len(frames) < 2:
+            return None
 
         features = self._extract_clip_features(frames)
-        metrics = self._compute_temporal_metrics(features)
+        if features is None or len(features) < 2:
+            return None
 
-        if metrics is None:
-            return {
-                "video_path": video_path,
-                "status": "skipped",
-                "reason": "failed to compute temporal metrics",
-                "sampled_frame_indices": frame_indices,
-                "readable_frame_indices": valid_indices,
-            }
+        return self._compute_temporal_consistency_score(features)
 
-        result = {
-            "video_path": video_path,
-            "status": "success",
-            "score": metrics["ts"],
-            "acm": metrics["acm"],
-            "video_sim": metrics["video_sim"],
-            "num_frames": len(frames),
-            "num_transitions": metrics["num_transitions"],
-            "tji": metrics["tji"],
-            "tji_score": metrics["tji_score"],
-            "ts": metrics["ts"],
-            "sampled_frame_indices": frame_indices,
-            "readable_frame_indices": valid_indices,
-        }
-        return result
-
-    def _compute_temporal_metrics(self, features: Any) -> dict[str, Any] | None:
+    def _compute_temporal_consistency_score(self, features: Any) -> float | None:
         torch = self._torch
         if torch is None:
             raise RuntimeError("torch is not initialized")
-
         if features is None or len(features) < 2:
             return None
 
         with torch.no_grad():
-            sims = torch.nn.functional.cosine_similarity(
+            adjacent_similarities = torch.nn.functional.cosine_similarity(
                 features[:-1],
                 features[1:],
                 dim=-1,
             )
-            sims = torch.clamp(sims, min=0.0)
-
-            acm = float(sims.mean().item())
-            video_sim = float(sims.sum().item())
-            num_transitions = int(len(features) - 1)
+            adjacent_similarities = torch.clamp(adjacent_similarities, min=0.0)
+            acm = float(adjacent_similarities.mean().item())
 
             if len(features) >= 3:
                 velocity = (features[1:] - features[:-1]).norm(dim=1)
                 acceleration = (
                     features[2:] - 2 * features[1:-1] + features[:-2]
                 ).norm(dim=1)
-
                 denom = 0.5 * (velocity[1:] + velocity[:-1]) + 1e-8
                 tji_tensor = (acceleration / denom).mean()
                 tji = float(tji_tensor.item())
-                tji_score = float(torch.exp(-0.5 * tji_tensor).item())
             else:
                 tji = 0.0
-                tji_score = 1.0
 
-            ts = acm / (1.0 + tji)
-            if not math.isfinite(ts):
-                ts = 0.0
-
-        return {
-            "acm": clamp01(acm),
-            "video_sim": video_sim,
-            "num_transitions": num_transitions,
-            "tji": float(tji),
-            "tji_score": clamp01(tji_score),
-            "ts": clamp01(float(ts)),
-        }
-
-    # ------------------------------------------------------------------
-    # CLIP utilities
-    # ------------------------------------------------------------------
+            score = acm / (1.0 + tji)
+            if not math.isfinite(score):
+                return 0.0
+            return clamp01(float(score))
 
     def _ensure_clip(self) -> str | None:
-        """Initialize CLIP lazily.
-
-        Returns None if ready, otherwise a reason string.
-        """
         if self._clip_model is not None and self._preprocess is not None:
             return None
 
@@ -424,32 +248,25 @@ class TemporalConsistencyMetric:
         except Exception as exc:  # noqa: BLE001
             return f"PIL is required for temporal_consistency: {type(exc).__name__}: {exc}"
 
-        model_source = None
-
-        if self.weight_path:
-            weight_path = Path(str(self.weight_path)).expanduser().resolve()
-            if not weight_path.exists():
-                return f"CLIP weight path does not exist: {weight_path}"
-            model_source = str(weight_path)
-        elif self.allow_clip_model_name:
-            # This may rely on local CLIP cache or trigger download depending on
-            # clip package behavior. Disabled by default for offline servers.
-            model_source = self.clip_model_name
-        else:
+        if not self.weight_path:
             return (
-                "CLIP weight path is required. Set config['clip_weight_path'] to a local "
-                "CLIP .pt file, or set allow_clip_model_name=true only if the model is "
-                "already cached locally."
+                "CLIP weight path is required. Set config['clip_weight_path'] to a local CLIP .pt file."
             )
 
-        try:
-            model, preprocess = self._clip.load(model_source, device=self.device, jit=False)
-            model.eval()
+        weight_path = Path(str(self.weight_path)).expanduser().resolve()
+        if not weight_path.exists():
+            return f"CLIP weight path does not exist: {weight_path}"
 
+        try:
+            model, preprocess = self._clip.load(
+                str(weight_path),
+                device=self.device,
+                jit=False,
+            )
+            model.eval()
             self._clip_model = model
             self._preprocess = preprocess
             return None
-
         except Exception as exc:  # noqa: BLE001
             self._clip_model = None
             self._preprocess = None
@@ -476,108 +293,28 @@ class TemporalConsistencyMetric:
                 features = torch.nn.functional.normalize(features, dim=-1, p=2)
                 all_features.append(features)
 
-            return torch.cat(all_features, dim=0)
+        if not all_features:
+            return None
+        return torch.cat(all_features, dim=0)
 
-    # ------------------------------------------------------------------
-    # Video utilities
-    # ------------------------------------------------------------------
-
-    def _sample_frame_indices(self, video_path: str) -> list[int]:
-        info = self._inspect_video(video_path)
-        frame_count = int(info.get("frame_count") or 0)
-
-        if frame_count <= 0:
-            return []
-
-        if self.frame_positions:
-            indices = []
-            for pos in self.frame_positions:
-                try:
-                    p = float(pos)
-                except (TypeError, ValueError):
-                    continue
-                p = max(0.0, min(1.0, p))
-                indices.append(int(round(p * (frame_count - 1))))
-            return sorted(set(indices))
-
-        n = max(1, self.num_frames)
-        if n == 1:
-            return [frame_count // 2]
-
-        indices = []
-        for i in range(n):
-            pos = (i + 1) / (n + 1)
-            idx = int(round(pos * (frame_count - 1)))
-            indices.append(idx)
-
-        return sorted(set(indices))
-
-    def _inspect_video(self, video_path: str) -> dict[str, Any]:
+    def _read_all_frames(self, video_path: str) -> list[Any]:
         cv2 = self._get_cv2()
-        path = Path(video_path)
-
-        info = {
-            "path": str(path),
-            "exists": path.exists(),
-            "is_file": path.is_file(),
-            "readable": False,
-            "frame_count": 0,
-            "fps": 0.0,
-            "width": 0,
-            "height": 0,
-            "duration": None,
-        }
-
-        if not path.exists() or not path.is_file():
-            return info
-
-        cap = cv2.VideoCapture(str(path))
+        cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             cap.release()
-            return info
+            return []
 
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        cap.release()
-
-        duration = None
-        if frame_count > 0 and fps > 0:
-            duration = float(frame_count / fps)
-
-        info.update(
-            {
-                "readable": frame_count > 0 and width > 0 and height > 0,
-                "frame_count": frame_count,
-                "fps": fps,
-                "width": width,
-                "height": height,
-                "duration": duration,
-            }
-        )
-        return info
-
-    def _read_frame(self, video_path: str, frame_idx: int) -> Any | None:
+        frames: list[Any] = []
         try:
-            cv2 = self._get_cv2()
-            cap = cv2.VideoCapture(str(video_path))
-            if not cap.isOpened():
-                cap.release()
-                return None
-
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_idx))
-            ok, frame_bgr = cap.read()
+            while True:
+                ok, frame_bgr = cap.read()
+                if not ok or frame_bgr is None:
+                    break
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                frames.append(frame_rgb)
+        finally:
             cap.release()
-
-            if not ok or frame_bgr is None:
-                return None
-
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            return frame_rgb
-
-        except Exception:
-            return None
+        return frames
 
     def _get_cv2(self) -> Any:
         if self._cv2 is not None:
@@ -588,13 +325,23 @@ class TemporalConsistencyMetric:
 
             self._cv2 = cv2
             return cv2
-
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"cv2 is required for temporal_consistency: {exc}") from exc
 
-# Legacy aliases kept for compatibility with older imports.
+
 TemporalConsistency = TemporalConsistencyMetric
 TEMPORAL_CONSISTENCY = TemporalConsistencyMetric
+
+
+def mean_or_none(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return float(sum(values) / len(values))
+
+
+def is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and math.isfinite(float(value))
+
 
 def clamp01(value: float) -> float:
     if not math.isfinite(float(value)):

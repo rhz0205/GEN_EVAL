@@ -1,4 +1,4 @@
-"""Instance-level consistency metric."""
+"""Instance-level consistency metric for fixed multi-view prepared tracks."""
 
 from __future__ import annotations
 
@@ -8,111 +8,220 @@ from typing import Any
 
 from gen_eval.schemas import GenerationSample, ObjectTrack
 
+EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
+    "camera_front",
+    "camera_cross_left",
+    "camera_cross_right",
+    "camera_rear_left",
+    "camera_rear_right",
+    "camera_rear",
+)
+
 
 class InstanceConsistencyMetric:
-    """Measure track-level stability from object metadata and embeddings."""
+    """Measure track-level stability from prepared object metadata and embeddings."""
 
     name = "instance_consistency"
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config = config or {}
-        metric_config = self.config
-        self.objects_key = str(metric_config.get("objects_key", "objects"))
-        self.object_tracks_key = str(metric_config.get("object_tracks_key", "object_tracks"))
-        self.object_crops_key = str(metric_config.get("object_crops_key", "object_crops"))
-        self.object_features_key = str(metric_config.get("object_features_key", "object_features"))
+        self.instance_tracks_key = str(
+            self.config.get("instance_tracks_key", "instance_tracks")
+        )
+        self.object_tracks_key = str(
+            self.config.get("object_tracks_key", "object_tracks")
+        )
+        self.objects_key = str(self.config.get("objects_key", "objects"))
+        self.object_crops_key = str(
+            self.config.get("object_crops_key", "object_crops")
+        )
+        self.object_features_key = str(
+            self.config.get("object_features_key", "object_features")
+        )
         self.object_class_scores_key = str(
-            metric_config.get("object_class_scores_key", "object_class_scores")
+            self.config.get("object_class_scores_key", "object_class_scores")
         )
         self.object_identities_key = str(
-            metric_config.get("object_identities_key", "object_identities")
+            self.config.get("object_identities_key", "object_identities")
         )
-        self.feature_weight = float(metric_config.get("feature_weight", 0.35))
-        self.class_weight = float(metric_config.get("class_weight", 0.2))
-        self.confidence_weight = float(metric_config.get("confidence_weight", 0.15))
-        self.geometry_weight = float(metric_config.get("geometry_weight", 0.3))
+
+        self.feature_weight = 0.35
+        self.class_weight = 0.20
+        self.confidence_weight = 0.15
+        self.geometry_weight = 0.30
 
     def evaluate(self, samples: list[GenerationSample]) -> dict[str, Any]:
-        """Evaluate instance consistency across manifest samples."""
         numpy_status = self._ensure_numpy()
         if numpy_status is not None:
-            return self._result(
-                score=None,
-                num_samples=0,
-                details={"evaluated_samples": [], "skipped_samples": [], "failed_samples": []},
-                status="skipped",
-                reason=numpy_status,
-            )
+            return {
+                "metric": self.name,
+                "status": "skipped",
+                "num_samples": len(samples),
+                "valid_sample_count": 0,
+                "mean_instance_consistency_score": None,
+                "details": {
+                    "evaluated_samples": [],
+                    "skipped_samples": [
+                        {
+                            "sample_id": getattr(sample, "sample_id", "unknown"),
+                            "reason": numpy_status,
+                        }
+                        for sample in samples
+                    ],
+                    "failed_samples": [],
+                },
+                "reason": numpy_status,
+            }
 
-        evaluated_samples = []
-        skipped_samples = []
-        failed_samples = []
-        total_score = 0.0
-        total_feature = 0.0
-        total_class = 0.0
-        total_confidence = 0.0
-        total_geometry = 0.0
+        evaluated_samples: list[dict[str, Any]] = []
+        skipped_samples: list[dict[str, Any]] = []
+        failed_samples: list[dict[str, Any]] = []
+        valid_scores: list[float] = []
 
         for sample in samples:
+            sample_id = getattr(sample, "sample_id", None) or "unknown"
             try:
-                tracks = self._collect_tracks(sample)
-                if not tracks:
-                    raise _SkipSample(
-                        "No usable object annotations were found. "
-                        "Provide sample.objects or object metadata keys."
-                    )
-                sample_result = self._score_sample(sample, tracks)
+                sample_result = self._evaluate_sample(sample)
             except _SkipSample as exc:
-                skipped_samples.append({"sample_id": sample.sample_id, "reason": str(exc)})
-                continue
+                sample_result = {
+                    "sample_id": sample_id,
+                    "status": "skipped",
+                    "reason": str(exc),
+                }
             except Exception as exc:  # pragma: no cover - defensive runtime guard
-                failed_samples.append({"sample_id": sample.sample_id, "reason": str(exc)})
-                continue
+                sample_result = {
+                    "sample_id": sample_id,
+                    "status": "failed",
+                    "reason": str(exc),
+                }
 
-            evaluated_samples.append(sample_result)
-            total_score += sample_result["score"]
-            total_feature += sample_result["feature_consistency"]
-            total_class += sample_result["class_stability"]
-            total_confidence += sample_result["confidence_stability"]
-            total_geometry += sample_result["geometry_coherence"]
+            status = sample_result.get("status")
+            score = sample_result.get("instance_consistency_score")
+            if status == "success" and is_finite_number(score):
+                evaluated_samples.append(
+                    {
+                        "sample_id": sample_id,
+                        "instance_consistency_score": float(score),
+                    }
+                )
+                valid_scores.append(float(score))
+            elif status == "skipped":
+                skipped_samples.append(
+                    {
+                        "sample_id": sample_id,
+                        "reason": sample_result.get("reason", "unknown"),
+                    }
+                )
+            elif status == "failed":
+                failed_samples.append(
+                    {
+                        "sample_id": sample_id,
+                        "reason": sample_result.get("reason", "unknown"),
+                    }
+                )
 
-        if not evaluated_samples:
-            return self._result(
-                score=None,
-                num_samples=0,
-                details={
-                    "evaluated_samples": [],
-                    "skipped_samples": skipped_samples,
-                    "failed_samples": failed_samples,
-                },
-                status="failed" if failed_samples else "skipped",
-                reason=(
-                    "No usable object tracks, features, class scores, or boxes were available for evaluation."
-                ),
-            )
+        mean_score = mean_or_none(valid_scores)
+        if mean_score is not None:
+            status = "success"
+            reason = None
+        else:
+            status = "failed" if failed_samples else "skipped"
+            reason = "No usable prepared tracks were evaluable for the fixed expected views."
 
-        num_samples = len(evaluated_samples)
-        averages = {
-            "instance_consistency": total_score / num_samples,
-            "feature_consistency": total_feature / num_samples,
-            "class_stability": total_class / num_samples,
-            "confidence_stability": total_confidence / num_samples,
-            "geometry_coherence": total_geometry / num_samples,
-        }
-        return self._result(
-            score=averages["instance_consistency"],
-            num_samples=num_samples,
-            details={
-                "average_results": averages,
+        result: dict[str, Any] = {
+            "metric": self.name,
+            "status": status,
+            "num_samples": len(samples),
+            "valid_sample_count": len(valid_scores),
+            "mean_instance_consistency_score": mean_score,
+            "details": {
                 "evaluated_samples": evaluated_samples,
                 "skipped_samples": skipped_samples,
                 "failed_samples": failed_samples,
             },
-            status="success",
-            reason=None,
+        }
+        if reason is not None:
+            result["reason"] = reason
+        return result
+
+    def _evaluate_sample(self, sample: GenerationSample) -> dict[str, Any]:
+        metadata = sample.metadata or {}
+        view_scores: list[float] = []
+
+        for view in EXPECTED_CAMERA_VIEWS:
+            tracks = self._collect_view_tracks(metadata, view)
+            if not tracks:
+                continue
+            view_score = self._score_view_tracks(sample, tracks)
+            if is_finite_number(view_score):
+                view_scores.append(float(view_score))
+
+        if not view_scores:
+            tracks = self._collect_legacy_tracks(sample)
+            if not tracks:
+                raise _SkipSample(
+                    "No usable prepared tracks found for expected views or legacy fallback."
+                )
+            view_score = self._score_view_tracks(sample, tracks)
+            if is_finite_number(view_score):
+                view_scores.append(float(view_score))
+
+        if not view_scores:
+            raise _SkipSample("No usable track-level signals were available for scoring.")
+
+        return {
+            "sample_id": sample.sample_id,
+            "status": "success",
+            "instance_consistency_score": mean_or_none(view_scores),
+        }
+
+    def _collect_view_tracks(
+        self,
+        metadata: dict[str, Any],
+        view: str,
+    ) -> list[dict[str, Any]]:
+        tracks: list[dict[str, Any]] = []
+
+        primary = metadata.get(self.instance_tracks_key)
+        if isinstance(primary, dict):
+            tracks.extend(self._normalize_track_items(primary.get(view)))
+
+        secondary = metadata.get(self.object_tracks_key)
+        if isinstance(secondary, dict):
+            tracks.extend(self._normalize_track_items(secondary.get(view)))
+
+        objects = metadata.get(self.objects_key)
+        if isinstance(objects, dict):
+            tracks.extend(self._normalize_track_items(objects.get(view)))
+
+        self._merge_view_mapping(
+            tracks,
+            metadata.get(self.object_features_key),
+            view,
+            "features",
+        )
+        self._merge_view_mapping(
+            tracks,
+            metadata.get(self.object_class_scores_key),
+            view,
+            "class_scores",
+        )
+        self._merge_view_mapping(
+            tracks,
+            metadata.get(self.object_identities_key),
+            view,
+            "identities",
+        )
+        self._merge_view_mapping(
+            tracks,
+            metadata.get(self.object_crops_key),
+            view,
+            "crops",
         )
 
-    def _collect_tracks(self, sample: GenerationSample) -> list[dict[str, Any]]:
+        return self._dedupe_tracks(tracks)
+
+    def _collect_legacy_tracks(self, sample: GenerationSample) -> list[dict[str, Any]]:
         metadata = sample.metadata or {}
         tracks: list[dict[str, Any]] = []
 
@@ -120,12 +229,10 @@ class InstanceConsistencyMetric:
             for obj in sample.objects:
                 tracks.append(self._track_from_objecttrack(obj))
 
-        for key in (self.objects_key, self.object_tracks_key):
+        for key in (self.instance_tracks_key, self.object_tracks_key, self.objects_key):
             value = metadata.get(key)
             if isinstance(value, list):
-                for item in value:
-                    if isinstance(item, dict):
-                        tracks.append(self._normalize_track_dict(item))
+                tracks.extend(self._normalize_track_items(value))
 
         features_value = metadata.get(self.object_features_key)
         if isinstance(features_value, dict):
@@ -143,19 +250,20 @@ class InstanceConsistencyMetric:
         if isinstance(crops_value, dict):
             self._merge_track_mapping(tracks, crops_value, "crops")
 
-        deduped: dict[str, dict[str, Any]] = {}
-        anonymous_index = 0
-        for track in tracks:
-            track_id = str(track.get("object_id") or f"track_{anonymous_index}")
-            if not track.get("object_id"):
-                anonymous_index += 1
-            if track_id in deduped:
-                deduped[track_id] = self._merge_track_dicts(deduped[track_id], track)
-            else:
-                track["object_id"] = track_id
-                deduped[track_id] = track
+        return self._dedupe_tracks(tracks)
 
-        return [track for track in deduped.values() if self._track_has_signal(track)]
+    def _normalize_track_items(self, raw_items: Any) -> list[dict[str, Any]]:
+        if raw_items is None:
+            return []
+        if isinstance(raw_items, list):
+            normalized = []
+            for item in raw_items:
+                if isinstance(item, ObjectTrack):
+                    normalized.append(self._track_from_objecttrack(item))
+                elif isinstance(item, dict):
+                    normalized.append(self._normalize_track_dict(item))
+            return normalized
+        return []
 
     def _track_from_objecttrack(self, obj: ObjectTrack) -> dict[str, Any]:
         return {
@@ -171,10 +279,30 @@ class InstanceConsistencyMetric:
             track["boxes"] = track["boxes_2d"]
         return track
 
-    def _merge_track_mapping(
-        self, tracks: list[dict[str, Any]], mapping: dict[str, Any], field_name: str
+    def _merge_view_mapping(
+        self,
+        tracks: list[dict[str, Any]],
+        mapping: Any,
+        view: str,
+        field_name: str,
     ) -> None:
-        by_id = {str(track.get("object_id")): track for track in tracks if track.get("object_id")}
+        if not isinstance(mapping, dict):
+            return
+        value = mapping.get(view)
+        if isinstance(value, dict):
+            self._merge_track_mapping(tracks, value, field_name)
+
+    def _merge_track_mapping(
+        self,
+        tracks: list[dict[str, Any]],
+        mapping: dict[str, Any],
+        field_name: str,
+    ) -> None:
+        by_id = {
+            str(track.get("object_id")): track
+            for track in tracks
+            if track.get("object_id")
+        }
         for object_id, value in mapping.items():
             object_id = str(object_id)
             if object_id not in by_id:
@@ -182,14 +310,36 @@ class InstanceConsistencyMetric:
                 tracks.append(by_id[object_id])
             by_id[object_id][field_name] = value
 
-    def _merge_track_dicts(self, left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    def _dedupe_tracks(self, tracks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: dict[str, dict[str, Any]] = {}
+        anonymous_index = 0
+        for track in tracks:
+            track_id = str(track.get("object_id") or f"track_{anonymous_index}")
+            if not track.get("object_id"):
+                anonymous_index += 1
+            if track_id in deduped:
+                deduped[track_id] = self._merge_track_dicts(deduped[track_id], track)
+            else:
+                track["object_id"] = track_id
+                deduped[track_id] = track
+        return [track for track in deduped.values() if self._track_has_signal(track)]
+
+    def _merge_track_dicts(
+        self,
+        left: dict[str, Any],
+        right: dict[str, Any],
+    ) -> dict[str, Any]:
         merged = dict(left)
         for key, value in right.items():
             if key not in merged or merged[key] in (None, [], {}):
                 merged[key] = value
             elif key == "boxes" and isinstance(merged[key], list) and isinstance(value, list):
                 merged[key] = merged[key] + value
-            elif key == "attributes" and isinstance(merged[key], dict) and isinstance(value, dict):
+            elif (
+                key == "attributes"
+                and isinstance(merged[key], dict)
+                and isinstance(value, dict)
+            ):
                 merged[key] = {**merged[key], **value}
         return merged
 
@@ -199,66 +349,37 @@ class InstanceConsistencyMetric:
             for key in ("boxes", "features", "class_scores", "identities", "crops")
         )
 
-    def _score_sample(self, sample: GenerationSample, tracks: list[dict[str, Any]]) -> dict[str, Any]:
-        feature_scores = []
-        class_scores = []
-        confidence_scores = []
-        geometry_scores = []
-        usable_tracks = []
-
+    def _score_view_tracks(
+        self,
+        sample: GenerationSample,
+        tracks: list[dict[str, Any]],
+    ) -> float | None:
+        track_scores: list[float] = []
         for track in tracks:
             feature_score = self._feature_consistency(track)
             class_score = self._class_stability(track)
             confidence_score = self._confidence_stability(track)
             geometry_score = self._geometry_coherence(track, sample)
 
-            if all(score is None for score in (feature_score, class_score, confidence_score, geometry_score)):
+            if all(
+                score is None
+                for score in (
+                    feature_score,
+                    class_score,
+                    confidence_score,
+                    geometry_score,
+                )
+            ):
                 continue
 
-            usable_tracks.append(
-                {
-                    "object_id": str(track.get("object_id", "")),
-                    "category": track.get("category"),
-                    "feature_consistency": feature_score,
-                    "class_stability": class_score,
-                    "confidence_stability": confidence_score,
-                    "geometry_coherence": geometry_score,
-                }
-            )
-            if feature_score is not None:
-                feature_scores.append(feature_score)
-            if class_score is not None:
-                class_scores.append(class_score)
-            if confidence_score is not None:
-                confidence_scores.append(confidence_score)
-            if geometry_score is not None:
-                geometry_scores.append(geometry_score)
-
-        if not usable_tracks:
-            raise _SkipSample(
-                f"Sample '{sample.sample_id}' has object entries but no usable per-track signals for scoring."
+            track_scores.append(
+                self.feature_weight * self._value_or_default(feature_score)
+                + self.class_weight * self._value_or_default(class_score)
+                + self.confidence_weight * self._value_or_default(confidence_score)
+                + self.geometry_weight * self._value_or_default(geometry_score)
             )
 
-        feature_avg = self._mean_or_default(feature_scores)
-        class_avg = self._mean_or_default(class_scores)
-        confidence_avg = self._mean_or_default(confidence_scores)
-        geometry_avg = self._mean_or_default(geometry_scores)
-        score = (
-            self.feature_weight * feature_avg
-            + self.class_weight * class_avg
-            + self.confidence_weight * confidence_avg
-            + self.geometry_weight * geometry_avg
-        )
-        return {
-            "sample_id": sample.sample_id,
-            "score": score,
-            "feature_consistency": feature_avg,
-            "class_stability": class_avg,
-            "confidence_stability": confidence_avg,
-            "geometry_coherence": geometry_avg,
-            "num_tracks": len(usable_tracks),
-            "tracks": usable_tracks,
-        }
+        return mean_or_none(track_scores)
 
     def _feature_consistency(self, track: dict[str, Any]) -> float | None:
         raw_features = track.get("features")
@@ -282,7 +403,6 @@ class InstanceConsistencyMetric:
     def _class_stability(self, track: dict[str, Any]) -> float | None:
         class_scores = track.get("class_scores")
         identities = track.get("identities")
-
         if class_scores is not None:
             return self._label_stability_from_scores(class_scores)
         if identities is not None:
@@ -312,7 +432,11 @@ class InstanceConsistencyMetric:
         stability = 1.0 / (1.0 + std_conf)
         return float(mean_conf * stability)
 
-    def _geometry_coherence(self, track: dict[str, Any], sample: GenerationSample) -> float | None:
+    def _geometry_coherence(
+        self,
+        track: dict[str, Any],
+        sample: GenerationSample,
+    ) -> float | None:
         boxes = self._normalize_boxes(track.get("boxes"))
         if len(boxes) < 2:
             return None
@@ -333,7 +457,9 @@ class InstanceConsistencyMetric:
 
         centers_array = np.asarray(centers, dtype=np.float64)
         displacements = np.linalg.norm(np.diff(centers_array, axis=0), axis=1)
-        motion_smoothness = 1.0 / (1.0 + float(displacements.std())) if displacements.size > 0 else 1.0
+        motion_smoothness = (
+            1.0 / (1.0 + float(displacements.std())) if displacements.size > 0 else 1.0
+        )
 
         area_log = np.log(np.maximum(np.asarray(areas, dtype=np.float64), 1e-8))
         area_stability = 1.0 / (1.0 + float(area_log.std()))
@@ -343,10 +469,14 @@ class InstanceConsistencyMetric:
 
         sorted_frames = sorted(frame_indices)
         observed_span = max(sorted_frames) - min(sorted_frames) + 1
-        missing_ratio = 0.0 if observed_span <= 0 else 1.0 - (len(sorted_frames) / observed_span)
+        missing_ratio = (
+            0.0 if observed_span <= 0 else 1.0 - (len(sorted_frames) / observed_span)
+        )
 
         metadata = sample.metadata or {}
-        total_frames = int(metadata.get("num_frames", observed_span or len(sorted_frames) or 1))
+        total_frames = int(
+            metadata.get("num_frames", observed_span or len(sorted_frames) or 1)
+        )
         valid_track_ratio = len(sorted_frames) / max(total_frames, len(sorted_frames), 1)
 
         score = (
@@ -453,30 +583,10 @@ class InstanceConsistencyMetric:
         normalized.sort(key=lambda entry: entry["frame_index"])
         return normalized
 
-    def _mean_or_default(self, values: list[float], default: float = 0.0) -> float:
-        if not values:
+    def _value_or_default(self, value: float | None, default: float = 0.0) -> float:
+        if value is None:
             return default
-        return float(sum(values) / len(values))
-
-    def _result(
-        self,
-        *,
-        score: float | None,
-        num_samples: int,
-        details: dict[str, Any],
-        status: str,
-        reason: str | None,
-    ) -> dict[str, Any]:
-        result = {
-            "metric": self.name,
-            "score": score,
-            "num_samples": num_samples,
-            "details": details,
-            "status": status,
-        }
-        if reason is not None:
-            result["reason"] = reason
-        return result
+        return float(value)
 
     def _ensure_numpy(self) -> str | None:
         try:
@@ -487,9 +597,18 @@ class InstanceConsistencyMetric:
         return None
 
 
-# Legacy alias kept for compatibility with older imports.
 InstanceConsistency = InstanceConsistencyMetric
 
 
 class _SkipSample(Exception):
     pass
+
+
+def mean_or_none(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return float(sum(values) / len(values))
+
+
+def is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and math.isfinite(float(value))
