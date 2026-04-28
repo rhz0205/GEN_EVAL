@@ -28,8 +28,6 @@ import math
 from pathlib import Path
 from typing import Any, Optional
 
-import json
-
 class TemporalConsistencyMetric:
     """Reference-free temporal consistency metric."""
 

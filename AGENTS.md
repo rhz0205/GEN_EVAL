@@ -59,6 +59,7 @@ src/gen_eval/
   config.py
   dataset.py
   evaluator.py
+  execution.py
   manifest_builder.py
   registry.py
   result_summary.py
@@ -74,6 +75,7 @@ Package responsibilities:
 - `src/gen_eval/config.py`: YAML loading and run-config resolution
 - `src/gen_eval/dataset.py`: manifest loading and lightweight manifest inspection helpers
 - `src/gen_eval/evaluator.py`: runs enabled metrics
+- `src/gen_eval/execution.py`: lightweight execution backend selection and orchestration
 - `src/gen_eval/manifest_builder.py`: reusable manifest generation helpers
 - `src/gen_eval/registry.py`: maps canonical metric names to metric classes
 - `src/gen_eval/result_summary.py`: reusable result summary formatting
@@ -89,6 +91,14 @@ Boundary rules:
 - Do not place checkpoints under `src/gen_eval/third_party/`.
 - Keep files like `.pth`, `.ckpt`, `.bin`, `.onnx`, and `.safetensors` under `pretrained_models/` or another explicit non-source local path.
 - Keep metric-specific loading logic inside each metric module unless there is a clear need for a tiny reusable adapter.
+- Keep Ray-specific logic isolated in `src/gen_eval/execution.py`.
+- Local execution must remain the default.
+- Ray support must remain optional and must not become a hard dependency for local runs.
+- Runtime config should stay simple inside existing run configs.
+- Do not create separate Ray config files such as `sample_ray.yaml` unless explicitly requested.
+- Do not rewrite metric implementations just to support Ray execution.
+- Metric results should stay dict-like and stable across backends.
+- Preferred metric result keys are: `metric`, `score`, `num_samples`, `details`, `status`, and optional `reason`.
 
 Keep metric-specific logic local when practical:
 - LoFTR logic inside `view_consistency.py`

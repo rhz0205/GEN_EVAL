@@ -26,10 +26,8 @@ class Evaluator:
         samples = load_manifest(manifest_path)
 
         results = []
-        for metric_name, metric_config in _iter_enabled_metrics(self.config.get("metrics", {})):
-            metric_class = registry.get(metric_name)
-            metric = metric_class(metric_config)
-            results.append(metric.evaluate(samples))
+        for metric_name, metric_config in iter_enabled_metrics(self.config.get("metrics", {})):
+            results.append(run_metric(metric_name, metric_config, samples))
 
         payload = {
             "manifest_path": str(manifest_path),
@@ -51,10 +49,38 @@ def _load_config(path: Path) -> dict[str, Any]:
         return load_yaml(path)
 
 
-def _iter_enabled_metrics(metrics_config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+def iter_enabled_metrics(metrics_config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     enabled = []
     for metric_name, raw_config in metrics_config.items():
         metric_config = raw_config or {}
         if metric_config.get("enabled", False):
             enabled.append((metric_name, metric_config))
     return enabled
+
+
+def run_metric(
+    metric_name: str,
+    metric_config: dict[str, Any],
+    samples: list[Any],
+) -> dict[str, Any]:
+    metric_class = registry.get(metric_name)
+    metric = metric_class(metric_config)
+    result = metric.evaluate(samples)
+    return normalize_metric_result(metric_name, result)
+
+
+def normalize_metric_result(metric_name: str, result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        raise TypeError(f"Metric '{metric_name}' must return a dict, got {type(result).__name__}.")
+
+    normalized = dict(result)
+    normalized.setdefault("metric", metric_name)
+    normalized.setdefault("score", None)
+    normalized.setdefault("num_samples", 0)
+
+    details = normalized.get("details")
+    normalized["details"] = details if isinstance(details, dict) else {}
+
+    status = normalized.get("status")
+    normalized["status"] = str(status) if status is not None else "failed"
+    return normalized

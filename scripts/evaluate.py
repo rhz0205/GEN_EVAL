@@ -13,7 +13,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from gen_eval.config import resolve_run_config
-from gen_eval.evaluator import Evaluator
+from gen_eval.execution import run_evaluation
 from gen_eval.result_summary import print_evaluation_summary
 from gen_eval.result_writer import build_result_payload, save_result_payload
 
@@ -29,8 +29,7 @@ def main() -> int:
     args = parser.parse_args()
 
     resolved_config = resolve_run_config(args.config)
-    evaluator = Evaluator(resolved_config)
-    results = evaluator.run()
+    results = run_evaluation(resolved_config)
 
     payload = build_result_payload(resolved_config, results)
 
