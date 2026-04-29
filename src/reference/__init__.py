@@ -12,9 +12,8 @@ from reference.preparer import (
 
 _CLASS_NAMES = {
     "OpenSeeDReference": "openseed_semantic",
-    "DepthReference": "depth_reference",
+    "DepthReference": "depthanything_depth",
     "ObjectTrackReference": "object_tracks",
-    "PlanningResponseReference": "planning_response",
 }
 
 
@@ -32,7 +31,6 @@ __all__ = [
     "OpenSeeDReference",
     "DepthReference",
     "ObjectTrackReference",
-    "PlanningResponseReference",
     "REFERENCE_REGISTRY",
     "REFERENCE_ALIASES",
     "build_reference_generator",

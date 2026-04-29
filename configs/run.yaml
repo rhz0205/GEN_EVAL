@@ -1,19 +1,38 @@
 run:
-  dataset_name: sample
-  data_count: 20
-  timestamp: "202604280811"
+  dataset_name: geely
+  data_count: 10
+  timestamp: "20260429022524"
+  profile: debug
+
   paths:
-    data_file: data/sample_20_202604280811.json
-    output_dir: outputs/sample/20_202604280811
+    data_file: data/geely_10_20260429022524.json
+    output_dir: outputs/geely/10_20260429022524
+
   stages:
     inspect_data: true
-    prepare_reference: false
+    prepare_reference: true
     evaluate: true
     summarize: true
     visualize: false
+
   runtime:
     device: cuda
-    parallel: false
-    num_workers: 4
+
+  profiles:
+    debug:
+      runtime:
+        backend: local_multi_gpu
+        device: cuda
+        devices:
+          - 0
+    eval:
+      runtime:
+        backend: ray
+        device: cuda
+        ray_address: auto
+        shard_size: 1
+        num_cpus_per_task: 4
+        num_gpus_per_task: 1
+
   logging:
     level: INFO

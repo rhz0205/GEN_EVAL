@@ -10,14 +10,12 @@ from typing import Any
 from reference.base import ReferenceGenerator
 
 _REFERENCE_SPECS: dict[str, tuple[str, str]] = {
-    "openseed_semantic": ("reference.openseed", "OpenSeeDReference"),
-    "depth_reference": ("reference.depth", "DepthReference"),
-    "object_tracks": ("reference.tracking", "ObjectTrackReference"),
-    "planning_response": ("reference.planning", "PlanningResponseReference"),
+    "openseed_semantic": ("reference.openseed_semantic", "OpenSeeDReference"),
+    "depthanything_depth": ("reference.depthanything_depth", "DepthReference"),
+    "object_tracks": ("reference.object_tracks", "ObjectTrackReference"),
 }
 
 REFERENCE_ALIASES: dict[str, str] = {
-    "openseed_semantics": "openseed_semantic",
 }
 
 _REFERENCE_CLASS_CACHE: dict[str, type[ReferenceGenerator]] = {}
@@ -36,6 +34,39 @@ def _load_reference_class(module_path: str, class_name: str) -> type[ReferenceGe
 
 
 REFERENCE_REGISTRY: dict[str, tuple[str, str]] = dict(_REFERENCE_SPECS)
+
+
+def build_enabled_generator_configs(config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    nested = config.get("reference")
+    reference_config = nested if isinstance(nested, dict) else config
+    enabled_configs: list[tuple[str, dict[str, Any]]] = []
+
+    generator_map = reference_config.get("generators")
+    if isinstance(generator_map, dict):
+        for name, raw_generator_config in generator_map.items():
+            generator_config = dict(raw_generator_config or {})
+            if not generator_config.get("enabled", True):
+                continue
+            canonical_name = REFERENCE_ALIASES.get(str(name), str(name))
+            enabled_configs.append((canonical_name, generator_config))
+
+    legacy_generators = config.get("reference_generators")
+    if isinstance(legacy_generators, list):
+        for raw_generator_config in legacy_generators:
+            if not isinstance(raw_generator_config, dict):
+                continue
+            if not raw_generator_config.get("enabled", True):
+                continue
+            name = raw_generator_config.get("name")
+            if not name:
+                raise ValueError("Each legacy reference generator config must contain 'name'.")
+            canonical_name = REFERENCE_ALIASES.get(str(name), str(name))
+            enabled_configs.append((canonical_name, dict(raw_generator_config)))
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for name, generator_config in enabled_configs:
+        deduped[name] = generator_config
+    return [(name, generator_config) for name, generator_config in deduped.items()]
 
 
 def build_reference_generator(name: str, config: dict[str, Any] | None = None) -> ReferenceGenerator:
@@ -196,8 +227,9 @@ class ReferencePreparer:
             "num_generators": len(self.generators),
             "enriched_data_path": str(Path(output_path)),
             "reference_output_dir": str(reference_root),
-            "generator_summary": generator_summaries,
+            "generator_summary": self._build_generator_summary(generator_summaries, len(samples)),
             "failed_samples": failed_samples,
+            "failed_sample_count": len(failed_samples),
             "continue_on_error": self.continue_on_error,
         }
         write_json(summary_path, summary)
@@ -210,31 +242,24 @@ class ReferencePreparer:
         return config
 
     def _build_generators(self, config: dict[str, Any]) -> list[ReferenceGenerator]:
-        nested = self._resolve_reference_config(config)
         generators: list[ReferenceGenerator] = []
+        for name, generator_config in build_enabled_generator_configs(config):
+            generators.append(build_reference_generator(name, generator_config))
+        return generators
 
-        generator_map = nested.get("generators")
-        if isinstance(generator_map, dict):
-            for name, raw_generator_config in generator_map.items():
-                generator_config = dict(raw_generator_config or {})
-                if not generator_config.get("enabled", True):
-                    continue
-                generators.append(build_reference_generator(str(name), generator_config))
-
-        legacy_generators = config.get("reference_generators")
-        if isinstance(legacy_generators, list):
-            for raw_generator_config in legacy_generators:
-                if not isinstance(raw_generator_config, dict):
-                    continue
-                if not raw_generator_config.get("enabled", True):
-                    continue
-                name = raw_generator_config.get("name")
-                if not name:
-                    raise ValueError("Each legacy reference generator config must contain 'name'.")
-                generators.append(build_reference_generator(str(name), raw_generator_config))
-
-        deduped: dict[str, ReferenceGenerator] = {}
-        for generator in generators:
-            deduped[generator.name] = generator
-
-        return list(deduped.values())
+    def _build_generator_summary(
+        self,
+        generator_summaries: dict[str, dict[str, int]],
+        num_samples: int,
+    ) -> dict[str, dict[str, Any]]:
+        summary: dict[str, dict[str, Any]] = {}
+        for name, stats in generator_summaries.items():
+            prepared = int(stats.get("prepared", 0) or 0)
+            failed = int(stats.get("failed", 0) or 0)
+            coverage_ratio = (prepared / num_samples) if num_samples > 0 else 0.0
+            summary[name] = {
+                "prepared": prepared,
+                "failed": failed,
+                "coverage_ratio": round(coverage_ratio, 6),
+            }
+        return summary

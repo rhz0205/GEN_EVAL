@@ -8,7 +8,7 @@ from modules.base import BaseModule
 _MODULE_SPECS: dict[str, tuple[str, str]] = {
     "video_integrity": ("modules.video_integrity", "VideoIntegrity"),
     "temporal_consistency": ("modules.temporal_consistency", "TemporalConsistency"),
-    "appearance_consistency": ("modules.appearance_consistency", "AppearanceConsistency"),
+    "instance_coherence": ("modules.instance_coherence", "InstanceCoherence"),
     "depth_consistency": ("modules.depth_consistency", "DepthConsistency"),
     "semantic_consistency": ("modules.semantic_consistency", "SemanticConsistency"),
     "instance_consistency": ("modules.instance_consistency", "InstanceConsistency"),
@@ -46,7 +46,7 @@ __all__ = [
     "BaseModule",
     "VideoIntegrity",
     "TemporalConsistency",
-    "AppearanceConsistency",
+    "InstanceCoherence",
     "DepthConsistency",
     "SemanticConsistency",
     "InstanceConsistency",

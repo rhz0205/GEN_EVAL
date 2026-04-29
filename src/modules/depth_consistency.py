@@ -5,6 +5,7 @@ import importlib
 import math
 import os
 import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -40,12 +41,26 @@ EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
 )
 
 
+def load_torch_state(path: str | Path, *, map_location: str) -> Any:
+    try:
+        return torch.load(str(path), map_location=map_location, weights_only=True)
+    except TypeError:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="You are using `torch.load` with `weights_only=False`",
+                category=FutureWarning,
+            )
+            return torch.load(str(path), map_location=map_location)
+
+
 class DepthConsistency(BaseModule):
     name = "depth_consistency"
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         super().__init__(config=config)
         self.camera_videos_key = self.config.get("camera_videos_key", "camera_videos")
+        self.depth_maps_key = self.config.get("depth_maps_key", "depth_maps")
         self.device = self.config.get("device", "cuda")
         self.encoder = self.config.get("encoder", "vits")
         self.weight_path = self.config.get("weight_path", "pretrained_models/depth")
@@ -105,10 +120,13 @@ class DepthConsistency(BaseModule):
             score = sample_result.get("depth_consistency_score")
 
             if status == "success" and is_finite_number(score):
+                view_scores = sample_result.get("view_scores", {})
                 evaluated_samples.append(
                     {
                         "sample_id": sample_id,
                         "depth_consistency_score": float(score),
+                        "view_scores": view_scores if isinstance(view_scores, dict) else {},
+                        "num_evaluated_views": len(view_scores) if isinstance(view_scores, dict) else 0,
                     }
                 )
                 valid_scores.append(float(score))
@@ -147,20 +165,41 @@ class DepthConsistency(BaseModule):
         sample_id = getattr(sample, "sample_id", None) or "unknown"
         metadata = getattr(sample, "metadata", None) or {}
         camera_videos = metadata.get(self.camera_videos_key)
+        depth_maps = metadata.get(self.depth_maps_key)
 
         if not isinstance(camera_videos, dict) or not camera_videos:
             return skipped_result(sample_id, f"metadata['{self.camera_videos_key}'] must be a non-empty dict.")
 
         normalized_videos = {str(view): str(path) for view, path in camera_videos.items() if path is not None}
+        normalized_depth_maps = (
+            {str(view): str(path) for view, path in depth_maps.items() if path is not None}
+            if isinstance(depth_maps, dict)
+            else {}
+        )
         missing_views = [view for view in EXPECTED_CAMERA_VIEWS if view not in normalized_videos]
         if missing_views:
             return skipped_result(sample_id, f"Missing expected camera views: {', '.join(missing_views)}.")
 
         view_scores: list[float] = []
+        view_details: dict[str, dict[str, Any]] = {}
         for view in EXPECTED_CAMERA_VIEWS:
+            depth_map_path = normalized_depth_maps.get(view)
+            if depth_map_path:
+                view_score = self._evaluate_view_depth_map(depth_map_path)
+                if is_finite_number(view_score):
+                    view_scores.append(float(view_score))
+                    view_details[view] = {
+                        "score": float(view_score),
+                        "source": "depth_map",
+                    }
+                    continue
             view_score = self._evaluate_view_video(normalized_videos[view])
             if is_finite_number(view_score):
                 view_scores.append(float(view_score))
+                view_details[view] = {
+                    "score": float(view_score),
+                    "source": "video",
+                }
 
         if not view_scores:
             return skipped_result(sample_id, "No expected camera view produced a valid depth consistency score.")
@@ -169,6 +208,8 @@ class DepthConsistency(BaseModule):
             "sample_id": sample_id,
             "status": "success",
             "depth_consistency_score": mean_or_none(view_scores),
+            "view_scores": view_details,
+            "num_evaluated_views": len(view_details),
         }
 
     def _evaluate_view_video(self, video_path: str) -> float | None:
@@ -179,6 +220,22 @@ class DepthConsistency(BaseModule):
         if len(frames) < 2:
             return None
         depths = self._infer_depth(frames)
+        if depths is None or len(depths) < 2:
+            return None
+        depth_rgb = self._render_depth(depths)
+        avg_l2 = self._compute_depth_l2(depth_rgb)
+        if avg_l2 is None:
+            return None
+        return self._l2_to_score(avg_l2)
+
+    def _evaluate_view_depth_map(self, depth_map_path: str) -> float | None:
+        path = Path(depth_map_path)
+        if not path.exists() or not path.is_file():
+            return None
+        try:
+            depths = np.load(path, mmap_mode="r")
+        except Exception:
+            return None
         if depths is None or len(depths) < 2:
             return None
         depth_rgb = self._render_depth(depths)
@@ -216,8 +273,10 @@ class DepthConsistency(BaseModule):
                 sys.path.insert(0, repo_path)
 
         try:
-            module = importlib.import_module(self.video_depth_module)
-            depth_cls = getattr(module, self.video_depth_class)
+            with open(os.devnull, "w") as devnull:
+                with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                    module = importlib.import_module(self.video_depth_module)
+                    depth_cls = getattr(module, self.video_depth_class)
         except Exception as exc:
             return f"Failed to import {self.video_depth_module}.{self.video_depth_class}: {type(exc).__name__}: {exc}"
 
@@ -231,7 +290,7 @@ class DepthConsistency(BaseModule):
 
         try:
             engine = depth_cls(**MODEL_CONFIGS[self.encoder])
-            state = torch.load(str(checkpoint_path), map_location="cpu")
+            state = load_torch_state(checkpoint_path, map_location="cpu")
             engine.load_state_dict(state, strict=True)
             self._depth_engine = engine.to(self.device).eval()
             return None
@@ -260,6 +319,9 @@ class DepthConsistency(BaseModule):
     def _infer_depth(self, frames: list[Any]) -> Any | None:
         if self._depth_engine is None:
             raise RuntimeError("depth engine is not initialized")
+        frame_array = np.asarray(frames)
+        if frame_array.size == 0:
+            return None
 
         context = open(os.devnull, "w") if self.silence_depth_stdout else None
         if context is None:
@@ -269,7 +331,7 @@ class DepthConsistency(BaseModule):
                 enabled=(self.device == "cuda" and not self.depth_fp32),
             ):
                 depths, _ = self._depth_engine.infer_video_depth(
-                    frames,
+                    frame_array,
                     self.target_fps,
                     input_size=self.input_size,
                     target_size=self.target_size,
@@ -285,7 +347,7 @@ class DepthConsistency(BaseModule):
                         enabled=(self.device == "cuda" and not self.depth_fp32),
                     ):
                         depths, _ = self._depth_engine.infer_video_depth(
-                            frames,
+                            frame_array,
                             self.target_fps,
                             input_size=self.input_size,
                             target_size=self.target_size,

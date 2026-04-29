@@ -105,3 +105,68 @@
     - write only into `D:\Project\worldbench`
     - make limited changes
     - report touched files, risks, and validation commands
+44. Remote-server collaboration control:
+    - all future code or config changes must be confirmed by the user before modification
+    - after each approved change, always report the touched files so the user can copy them to the remote server
+    - prefer relative paths for all non-data resources
+    - when reasoning about remote deployment, use `/di/group/renhongze/wm_gen_data_eval` as the project root
+45. Project execution workflow for the current phase:
+    - random sample selection
+    - dataset inspect
+    - reference data preparation
+    - multi-dimensional evaluation
+    - result summarization
+    - visualization
+46. The current development roadmap must follow these phases:
+    - phase 1: single-machine end-to-end pipeline validation
+    - phase 2: metric logic review and correction
+    - phase 3: multi-server multi-gpu parallelization based on ray
+    - phase 4: overall project optimization
+47. Phase 1 requirements:
+    - first prioritize a stable single-machine closed loop before changing metric logic
+    - the closed loop includes random sampling, inspect, reference preparation, evaluation, summarization, and visualization
+    - use small sample sets first, then gradually increase data scale
+    - prefer fixing protocol, path, dependency, and integration issues before optimizing algorithms
+48. Phase 1 completion criteria:
+    - the full pipeline can run on the remote server from sampling to visualization
+    - reference outputs are generated as formal artifacts, not temporary byproducts
+    - result files are written stably under the canonical output layout
+    - failed or skipped samples are traceable from structured result files
+49. Phase 1 diagnostic priority:
+    - always inspect `failed_samples.json` first when module execution fails
+    - always distinguish initialization failures, per-sample failures, and skipped-sample cases
+    - do not start ray-based parallelization before the single-machine pipeline is stable
+50. Phase 2 requirements:
+    - review whether each metric definition matches the intended evaluation target
+    - review whether each score range, aggregation rule, and failure policy is reasonable
+    - change metric formulas only when explicitly approved by the user
+51. Phase 3 requirements:
+    - parallelization should be introduced only after the single-machine logic is stable
+    - ray-based scaling should consider sample-level parallelism, module-level parallelism, and staged reference/evaluation execution
+    - do not parallelize unstable or poorly understood logic
+52. Phase 4 requirements:
+    - optimize config clarity, dependency handling, logging, output protocol stability, and performance
+    - preserve the canonical workflow and directory conventions while optimizing
+53. The current formal metric-role definitions for the validated baseline are:
+    - `video_integrity`: input health and multi-view package integrity check
+    - `temporal_consistency`: RGB-domain temporal stability metric
+    - `depth_consistency`: depth-based temporal stability metric
+54. `video_integrity` should be interpreted as a gatekeeping health-check metric:
+    - it evaluates whether the expected multi-view videos are present, readable, and mutually consistent in frame count, fps, duration, and resolution
+    - it is not a perceptual quality metric
+    - a successful module run does not imply every sample passed the integrity checks
+55. `temporal_consistency` should be interpreted as the primary no-reference temporal stability metric:
+    - it evaluates temporal smoothness in the RGB or perceptual feature domain
+    - it is intended to reflect visual flicker, abrupt temporal changes, and unstable appearance over time
+56. `depth_consistency` should be interpreted as depth-based temporal stability, not generic geometric correctness:
+    - it evaluates temporal stability after projecting the video into a depth-related representation
+    - it is intended to complement `temporal_consistency`, not replace it
+    - it should not be described as a direct measure of absolute depth accuracy or full cross-view geometric consistency unless the implementation is explicitly changed later
+57. The intended division of labor among these three metrics is:
+    - `video_integrity`: verifies whether the sample package is structurally usable for downstream evaluation
+    - `temporal_consistency`: measures temporal stability in the visual feature domain
+    - `depth_consistency`: measures temporal stability in the depth-related feature domain
+58. During future reviews and documentation updates:
+    - keep the metric name `depth_consistency` for now
+    - explicitly explain in prose that its current meaning is `depth-based temporal stability`
+    - do not claim that `temporal_consistency` and `depth_consistency` are duplicates; their distinction is the feature domain they operate in

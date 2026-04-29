@@ -1,35 +1,57 @@
 metrics:
   video_integrity:
     enabled: true
-    device: cuda
-    batch_size: 1
+    metric:
+      device: cuda
+      batch_size: 1
   temporal_consistency:
+    enabled: true
+    metric:
+      device: cuda
+      batch_size: 1
+    model:
+      weight_path: pretrained_models/clip/ViT-B-32.pt
+  instance_coherence:
     enabled: false
-    model_path: pretrained_models/temporal/model.pt
-    device: cuda
-    batch_size: 1
-  appearance_consistency:
-    enabled: false
-    model_path: pretrained_models/appearance/model.pt
-    device: cuda
-    batch_size: 1
+    metric:
+      device: cuda
+      batch_size: 1
+      object_features_key: object_features
   depth_consistency:
-    enabled: false
-    model_path: pretrained_models/depth/model.pt
-    device: cuda
-    batch_size: 1
+    enabled: true
+    metric:
+      device: cuda
+      batch_size: 1
+    model:
+      repo_path: src/third_party
+      weight_path: pretrained_models/depth
+      depth_checkpoint_path: pretrained_models/depth/metric_video_depth_anything_vits.pth
+      model_path: pretrained_models/dinov2
   semantic_consistency:
     enabled: false
-    repo_path: src/third_party/OpenSeeD
-    device: cuda
-    batch_size: 1
+    metric:
+      device: cuda
+      batch_size: 1
+      semantic_masks_key: semantic_masks
+      num_classes_key: semantic_num_classes
+      ignore_label_key: semantic_ignore_label
   instance_consistency:
     enabled: false
-    model_path: pretrained_models/instance/model.pt
-    device: cuda
-    batch_size: 1
+    metric:
+      device: cuda
+      batch_size: 1
+      instance_tracks_key: instance_tracks
+      object_tracks_key: object_tracks
+      object_class_scores_key: object_class_scores
+      object_identities_key: object_identities
+      class_weight: 0.35
+      confidence_weight: 0.20
+      geometry_weight: 0.45
   view_consistency:
-    enabled: false
-    model_path: pretrained_models/view/model.pt
-    device: cuda
-    batch_size: 1
+    enabled: true
+    metric:
+      device: cuda
+      batch_size: 1
+    model:
+      repo_path: src/third_party/LoFTR
+      weight_path: pretrained_models/loftr/outdoor_ds.ckpt

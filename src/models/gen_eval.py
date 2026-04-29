@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
+from models.executor import normalize_runtime_devices, run_evaluate_stage, run_prepare_reference_stage
 from models.result import (
     ensure_output_layout,
     write_json,
@@ -66,6 +68,7 @@ class GenEval:
             "dataset_name": self.dataset_name,
             "data_count": self.data_count,
             "timestamp": self.timestamp,
+            "profile": self.run_config.get("profile"),
             "data_file": str(self.data_file),
             "output_dir": str(self.output_dir),
             "config_paths": {
@@ -90,22 +93,37 @@ class GenEval:
         return stages
 
     def prepare_reference(self) -> dict[str, Any]:
-        from reference import ReferencePreparer
-
         reference_section = self.reference_config.get("reference")
         if isinstance(reference_section, dict) and not reference_section.get("enabled", True):
             return {"status": "skipped", "reason": "reference config is disabled"}
 
-        preparer = ReferencePreparer(self.reference_config)
-        summary = preparer.prepare(
-            data_path=self.data_file,
-            output_path=self.result_paths["enriched_data_path"],
-            summary_path=self.result_paths["reference_summary_path"],
-            output_dir=self.output_dir,
+        started_at = time.perf_counter()
+        runtime_config = self._runtime_config()
+        backend = str(runtime_config.get("backend", "serial"))
+        if backend == "ray":
+            ray_address = runtime_config.get("ray_address", "auto")
+            self.logger.info("Running prepare_reference with backend=%s address=%s", backend, ray_address)
+        else:
+            self.logger.info("Running prepare_reference with backend=%s", backend)
+        summary = run_prepare_reference_stage(
+            reference_config=self.reference_config,
+            data_path=str(self.data_file),
+            output_path=str(self.result_paths["enriched_data_path"]),
+            summary_path=str(self.result_paths["reference_summary_path"]),
+            output_dir=str(self.output_dir),
+            runtime_config=runtime_config,
         )
-        return {"status": "success", "summary": summary}
+        result = {
+            "status": "success",
+            "summary": summary,
+            "duration_seconds": round(time.perf_counter() - started_at, 6),
+        }
+        if isinstance(summary, dict) and summary.get("wall_time_seconds") is not None:
+            result["wall_time_seconds"] = summary.get("wall_time_seconds")
+        return result
 
     def evaluate(self) -> dict[str, Any]:
+        evaluate_started_at = time.perf_counter()
         data_path = self.result_paths["enriched_data_path"] if self.result_paths["enriched_data_path"].exists() else self.data_file
         dataset = self._build_dataset(data_path=data_path)
         inspection = dataset.inspect()
@@ -117,24 +135,56 @@ class GenEval:
             raise ValueError("No valid samples were found for evaluation.")
         num_samples = len(samples)
 
-        modules = self._build_modules()
-
-        metrics_result: dict[str, Any] = {}
-        for module_name, module in modules:
-            try:
-                metrics_result[module_name] = module.evaluate(samples)
-            except Exception as exc:
-                metrics_result[module_name] = {
-                    "metric": module_name,
-                    "status": "failed",
-                    "num_samples": num_samples,
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "details": {
-                        "evaluated_samples": [],
-                        "skipped_samples": [],
-                        "failed_samples": [],
-                    },
-                }
+        runtime_config = self._runtime_config()
+        backend = str(runtime_config.get("backend", "serial"))
+        if backend in {"local_multi_gpu", "ray"}:
+            if backend == "local_multi_gpu":
+                devices = normalize_runtime_devices(runtime_config)
+                self.logger.info("Running evaluate with backend=%s devices=%s", backend, devices)
+            else:
+                ray_address = runtime_config.get("ray_address", "auto")
+                self.logger.info("Running evaluate with backend=%s address=%s", backend, ray_address)
+            metrics_result = run_evaluate_stage(
+                samples=samples,
+                metrics_config=self.metrics_config,
+                runtime_config=runtime_config,
+            )
+            for module_name, module_result in metrics_result.items():
+                wall_time_seconds = float(module_result.get("wall_time_seconds", module_result.get("duration_seconds", 0.0)) or 0.0)
+                aggregated_compute_seconds = float(module_result.get("aggregated_compute_seconds", 0.0) or 0.0)
+                self.logger.info(
+                    "Module %s finished in %.3fs wall time (aggregated compute %.3fs)",
+                    module_name,
+                    wall_time_seconds,
+                    aggregated_compute_seconds,
+                )
+        else:
+            self.logger.info("Running evaluate with backend=%s", backend)
+            modules = self._build_modules()
+            metrics_result = {}
+            for module_name, module in modules:
+                module_started_at = time.perf_counter()
+                try:
+                    module_result = module.evaluate(samples)
+                except Exception as exc:
+                    module_result = {
+                        "metric": module_name,
+                        "status": "failed",
+                        "num_samples": num_samples,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "details": {
+                            "evaluated_samples": [],
+                            "skipped_samples": [],
+                            "failed_samples": [],
+                        },
+                    }
+                module_duration_seconds = round(time.perf_counter() - module_started_at, 6)
+                if isinstance(module_result, dict):
+                    module_result["wall_time_seconds"] = module_duration_seconds
+                    module_result["aggregated_compute_seconds"] = module_duration_seconds
+                    module_result["duration_seconds"] = module_duration_seconds
+                metrics_result[module_name] = module_result
+                self.logger.info("Module %s finished in %.3fs", module_name, module_duration_seconds)
 
         payload = write_metrics_result(
             metrics_result=metrics_result,
@@ -145,6 +195,7 @@ class GenEval:
             data_file=data_path,
             num_samples=num_samples,
         )
+        payload["duration_seconds"] = round(time.perf_counter() - evaluate_started_at, 6)
         write_summary_result(
             metrics_result=metrics_result,
             summary_path=self.result_paths["summary_path"],
@@ -185,6 +236,7 @@ class GenEval:
 
         metrics_payload: dict[str, Any] | None = None
         if stages.get("evaluate", False):
+            evaluate_started_at = time.perf_counter()
             metrics_payload = self.evaluate()
             evaluate_status = "success"
             evaluate_reason = None
@@ -195,7 +247,11 @@ class GenEval:
                         evaluate_status = "failed"
                         evaluate_reason = "One or more metrics failed."
                         break
-            stage_results["evaluate"] = {"status": evaluate_status, "path": str(self.result_paths["metrics_path"])}
+            stage_results["evaluate"] = {
+                "status": evaluate_status,
+                "path": str(self.result_paths["metrics_path"]),
+                "duration_seconds": round(time.perf_counter() - evaluate_started_at, 6),
+            }
             if evaluate_reason is not None:
                 stage_results["evaluate"]["reason"] = evaluate_reason
 
@@ -223,7 +279,7 @@ class GenEval:
         if stages.get("visualize", False):
             stage_results["visualize"] = {
                 "status": "skipped",
-                "reason": "visualization is handled by scripts/visualize_results.py in a later step",
+                "reason": "visualization is handled by scripts/visualize.py in a later step",
             }
 
         result = {
@@ -284,6 +340,22 @@ class GenEval:
                 return Path(output_dir)
         return Path("outputs") / self.dataset_name / f"{self.data_count}_{self.timestamp}"
 
+    def _runtime_config(self) -> dict[str, Any]:
+        runtime: dict[str, Any] = {}
+        base_runtime = self.run_config.get("runtime")
+        if isinstance(base_runtime, dict):
+            runtime.update(base_runtime)
+
+        profile_name = self.run_config.get("profile")
+        profiles = self.run_config.get("profiles")
+        if isinstance(profile_name, str) and profile_name and isinstance(profiles, dict):
+            selected = profiles.get(profile_name)
+            if isinstance(selected, dict):
+                profile_runtime = selected.get("runtime")
+                if isinstance(profile_runtime, dict):
+                    runtime.update(profile_runtime)
+        return runtime
+
     def _normalize_run_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         run_config = payload.get("run")
         if isinstance(run_config, dict):
@@ -298,9 +370,27 @@ class GenEval:
 
     def _normalize_metrics_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         metrics = payload.get("metrics")
-        if isinstance(metrics, dict):
-            return dict(metrics)
-        return dict(payload)
+        metrics_payload = metrics if isinstance(metrics, dict) else payload
+        normalized: dict[str, Any] = {}
+        for metric_name, metric_config in metrics_payload.items():
+            if not isinstance(metric_config, dict):
+                normalized[str(metric_name)] = metric_config
+                continue
+            flat_config: dict[str, Any] = {}
+            if "enabled" in metric_config:
+                flat_config["enabled"] = bool(metric_config.get("enabled"))
+            metric_section = metric_config.get("metric")
+            if isinstance(metric_section, dict):
+                flat_config.update(metric_section)
+            model_section = metric_config.get("model")
+            if isinstance(model_section, dict):
+                flat_config.update(model_section)
+            for key, value in metric_config.items():
+                if key in {"enabled", "metric", "model"}:
+                    continue
+                flat_config[key] = value
+            normalized[str(metric_name)] = flat_config
+        return normalized
 
     def _load_config(self, path: str | Path) -> dict[str, Any]:
         config_path = Path(path)

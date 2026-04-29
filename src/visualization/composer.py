@@ -3,9 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 VIDEO_SUFFIXES = (".mp4", ".avi", ".mov", ".mkv", ".webm")
+EXPECTED_CAMERA_VIEWS: tuple[str, ...] = (
+    "camera_front",
+    "camera_cross_left",
+    "camera_cross_right",
+    "camera_rear_left",
+    "camera_rear_right",
+    "camera_rear",
+)
 
 
 def ensure_visualization_layout(output_dir: str | Path) -> dict[str, Path]:
@@ -56,24 +66,71 @@ def compose_6v_image(input_dir: str | Path, output_dir: str | Path, *, name: str
             "input_dir": str(raw_dir),
             "output_dir": str(target_dir),
         }
-    source_files = collect_view_images(raw_dir)
-    if not source_files:
+    sample_dirs = sorted(path for path in raw_dir.iterdir() if path.is_dir())
+    if not sample_dirs:
         return {
             "name": name,
             "status": "skipped",
-            "reason": f"No image files were found in {raw_dir}",
+            "reason": f"No sample directories were found in {raw_dir}",
             "input_dir": str(raw_dir),
             "output_dir": str(target_dir),
         }
     target_dir.mkdir(parents=True, exist_ok=True)
-    return {
+    composed_count = 0
+    skipped_samples: list[dict[str, str]] = []
+
+    for sample_dir in sample_dirs:
+        view_paths = collect_sample_view_images(sample_dir)
+        missing_views = [view for view in EXPECTED_CAMERA_VIEWS if view not in view_paths]
+        if missing_views:
+            skipped_samples.append(
+                {
+                    "sample_id": sample_dir.name,
+                    "reason": f"missing raw images for views: {', '.join(missing_views)}",
+                }
+            )
+            continue
+
+        images = [Image.open(view_paths[view]).convert("RGB") for view in EXPECTED_CAMERA_VIEWS]
+        try:
+            tile_width, tile_height = images[0].size
+            canvas = Image.new("RGB", (tile_width * 3, tile_height * 2))
+            for index, image in enumerate(images):
+                if image.size != (tile_width, tile_height):
+                    image = image.resize((tile_width, tile_height))
+                row = index // 3
+                col = index % 3
+                canvas.paste(image, (col * tile_width, row * tile_height))
+            canvas.save(target_dir / f"{sample_dir.name}.png")
+            composed_count += 1
+        finally:
+            for image in images:
+                image.close()
+
+    if composed_count == 0:
+        return {
+            "name": name,
+            "status": "skipped",
+            "reason": "No samples produced a valid 6-view image composition.",
+            "input_dir": str(raw_dir),
+            "output_dir": str(target_dir),
+            "num_samples": len(sample_dirs),
+            "num_composed": 0,
+            "skipped_samples": skipped_samples,
+        }
+
+    payload = {
         "name": name,
-        "status": "skipped",
-        "reason": "6-view image composition is not implemented for the current raw-data protocol.",
+        "status": "partial" if skipped_samples else "success",
         "input_dir": str(raw_dir),
         "output_dir": str(target_dir),
-        "num_source_files": len(source_files),
+        "num_samples": len(sample_dirs),
+        "num_composed": composed_count,
+        "skipped_samples": skipped_samples,
     }
+    if skipped_samples:
+        payload["reason"] = skipped_samples[0]["reason"]
+    return payload
 
 
 def compose_6v_video(input_dir: str | Path, output_dir: str | Path, *, name: str) -> dict[str, Any]:
@@ -107,3 +164,18 @@ def compose_6v_video(input_dir: str | Path, output_dir: str | Path, *, name: str
         "output_dir": str(target_dir),
         "num_source_files": len(source_files),
     }
+
+
+def collect_sample_view_images(sample_dir: str | Path) -> dict[str, Path]:
+    root = Path(sample_dir)
+    matched: dict[str, Path] = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in IMAGE_SUFFIXES:
+            continue
+        for view in EXPECTED_CAMERA_VIEWS:
+            if view in path.stem and view not in matched:
+                matched[view] = path
+                break
+    return matched

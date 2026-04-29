@@ -28,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-config", default=str(DEFAULT_DATASET_CONFIG), help="Path to dataset config YAML file.")
     parser.add_argument("--metrics-config", default=str(DEFAULT_METRICS_CONFIG), help="Path to metrics config YAML file.")
     parser.add_argument("--reference-config", default=str(DEFAULT_REFERENCE_CONFIG), help="Path to reference config YAML file.")
+    parser.add_argument("--profile", default=None, help="Optional run profile override, for example debug or eval.")
     parser.add_argument("--stage", action="append", default=None, help="Optional repeated or comma-separated stage override.")
     parser.add_argument("--skip-reference", action="store_true", help="Force prepare_reference=false for this run.")
     parser.add_argument("--no-visualize", action="store_true", help="Force visualize=false for this run.")
@@ -82,7 +83,7 @@ def print_terminal_summary(result: dict[str, object]) -> None:
                     "mean_view_consistency_score",
                     "view_consistency_score",
                     "mean_temporal_consistency_score",
-                    "mean_appearance_consistency_score",
+                    "mean_instance_coherence_score",
                     "mean_depth_consistency_score",
                     "mean_semantic_consistency_score",
                     "mean_instance_consistency_score",
@@ -106,6 +107,8 @@ def main() -> int:
         metrics_config_path=args.metrics_config,
         reference_config_path=args.reference_config,
     )
+    if args.profile:
+        evaluator.run_config["profile"] = str(args.profile)
 
     stage_overrides = parse_stage_overrides(args.stage)
     if stage_overrides is None:

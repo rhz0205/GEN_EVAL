@@ -28,13 +28,11 @@ class InstanceConsistency(BaseModule):
         self.object_tracks_key = str(self.config.get("object_tracks_key", "object_tracks"))
         self.objects_key = str(self.config.get("objects_key", "objects"))
         self.object_crops_key = str(self.config.get("object_crops_key", "object_crops"))
-        self.object_features_key = str(self.config.get("object_features_key", "object_features"))
         self.object_class_scores_key = str(self.config.get("object_class_scores_key", "object_class_scores"))
         self.object_identities_key = str(self.config.get("object_identities_key", "object_identities"))
-        self.feature_weight = 0.35
-        self.class_weight = 0.20
-        self.confidence_weight = 0.15
-        self.geometry_weight = 0.30
+        self.class_weight = float(self.config.get("class_weight", 0.35))
+        self.confidence_weight = float(self.config.get("confidence_weight", 0.20))
+        self.geometry_weight = float(self.config.get("geometry_weight", 0.45))
 
     def evaluate(self, samples: list[GenerationSample]) -> dict[str, Any]:
         evaluated_samples: list[dict[str, Any]] = []
@@ -153,7 +151,6 @@ class InstanceConsistency(BaseModule):
         if isinstance(objects, dict):
             tracks.extend(self._normalize_track_items(objects.get(view)))
 
-        self._merge_view_mapping(tracks, metadata.get(self.object_features_key), view, "features")
         self._merge_view_mapping(tracks, metadata.get(self.object_class_scores_key), view, "class_scores")
         self._merge_view_mapping(tracks, metadata.get(self.object_identities_key), view, "identities")
         self._merge_view_mapping(tracks, metadata.get(self.object_crops_key), view, "crops")
@@ -171,10 +168,6 @@ class InstanceConsistency(BaseModule):
             value = metadata.get(key)
             if isinstance(value, list):
                 tracks.extend(self._normalize_track_items(value))
-
-        features_value = metadata.get(self.object_features_key)
-        if isinstance(features_value, dict):
-            self._merge_track_mapping(tracks, features_value, "features")
 
         class_scores_value = metadata.get(self.object_class_scores_key)
         if isinstance(class_scores_value, dict):
@@ -261,46 +254,25 @@ class InstanceConsistency(BaseModule):
     def _track_has_signal(self, track: dict[str, Any]) -> bool:
         return any(
             key in track and track[key] not in (None, [], {})
-            for key in ("boxes", "features", "class_scores", "identities", "crops")
+            for key in ("boxes", "class_scores", "identities")
         )
 
     def _score_view_tracks(self, sample: GenerationSample, tracks: list[dict[str, Any]]) -> float | None:
         track_scores: list[float] = []
         for track in tracks:
-            feature_score = self._feature_consistency(track)
             class_score = self._class_stability(track)
             confidence_score = self._confidence_stability(track)
             geometry_score = self._geometry_coherence(track, sample)
 
-            if all(score is None for score in (feature_score, class_score, confidence_score, geometry_score)):
+            if all(score is None for score in (class_score, confidence_score, geometry_score)):
                 continue
 
             track_scores.append(
-                self.feature_weight * self._value_or_default(feature_score)
-                + self.class_weight * self._value_or_default(class_score)
+                self.class_weight * self._value_or_default(class_score)
                 + self.confidence_weight * self._value_or_default(confidence_score)
                 + self.geometry_weight * self._value_or_default(geometry_score)
             )
         return mean_or_none(track_scores)
-
-    def _feature_consistency(self, track: dict[str, Any]) -> float | None:
-        raw_features = track.get("features")
-        if raw_features is None:
-            return None
-        features = np.asarray(raw_features, dtype=np.float64)
-        if features.ndim == 1:
-            return 1.0
-        if features.ndim > 2:
-            features = features.reshape(features.shape[0], -1)
-        if features.shape[0] < 2:
-            return 1.0
-
-        norms = np.linalg.norm(features, axis=1, keepdims=True)
-        norms = np.maximum(norms, 1e-8)
-        normalized = features / norms
-        cosine_values = np.sum(normalized[1:] * normalized[:-1], axis=1)
-        cosine_values = np.clip(cosine_values, -1.0, 1.0)
-        return float((cosine_values.mean() + 1.0) / 2.0)
 
     def _class_stability(self, track: dict[str, Any]) -> float | None:
         class_scores = track.get("class_scores")

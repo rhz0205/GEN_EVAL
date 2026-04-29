@@ -3,14 +3,16 @@ from __future__ import annotations
 from typing import Any
 
 from visualization.base import BaseVisualizer
-from visualization.depth import DepthVisualizer
-from visualization.multiview import MultiViewMatchVisualizer
-from visualization.semantic import SemanticVisualizer
+from visualization.vis_depth import DepthVisualizer
+from visualization.vis_multiview_match import MultiViewMatchVisualizer
+from visualization.vis_semantic import SemanticVisualizer
 
 VISUALIZER_REGISTRY: dict[str, type[BaseVisualizer]] = {
     "depth": DepthVisualizer,
     "semantic": SemanticVisualizer,
     "multiview": MultiViewMatchVisualizer,
+    "multiview_match": MultiViewMatchVisualizer,
+    "view": MultiViewMatchVisualizer,
 }
 
 

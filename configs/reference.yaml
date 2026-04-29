@@ -1,10 +1,9 @@
 reference:
-  enabled: false
+  enabled: true
   continue_on_error: false
   generators:
     openseed_semantic:
       enabled: false
-      class_name: OpenSeeDReference
       input_key: camera_videos
       output_key: semantic_masks
       num_classes_key: semantic_num_classes
@@ -31,12 +30,22 @@ reference:
         - sky
         - pole
         - barrier
-    depth_reference:
-      enabled: false
-      class_name: DepthReference
+    depthanything_depth:
+      enabled: true
+      input_key: camera_videos
+      output_key: depth_maps
+      num_frames_key: depth_num_frames
+      repo_path: src/third_party
+      weight_path: pretrained_models/depth
+      depth_checkpoint_path: pretrained_models/depth/metric_video_depth_anything_vits.pth
+      device: cuda
+      encoder: vits
+      target_fps: 12
+      input_size: 400
+      target_size:
+        - 450
+        - 800
+      depth_fp32: false
+      force: false
     object_tracks:
       enabled: false
-      class_name: ObjectTrackReference
-    planning_response:
-      enabled: false
-      class_name: PlanningResponseReference

@@ -15,7 +15,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from models.result import write_json
-from visualization import VISUALIZER_REGISTRY, build_visualizer
+from visualization import build_visualizer
 from visualization.composer import ensure_visualization_layout
 
 try:
@@ -25,7 +25,7 @@ except ImportError:
 
 
 DEFAULT_CONFIG_PATH = Path("configs/run.yaml")
-VALID_TARGETS = ("depth", "semantic", "multiview", "all")
+VALID_TARGETS = ("depth", "semantic", "multiview", "multiview_match", "view", "all")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,15 +86,20 @@ def parse_targets(raw_values: list[str] | None) -> list[str]:
         raise ValueError(f"Unsupported target values: {', '.join(invalid)}")
     if "all" in names:
         return ["depth", "semantic", "multiview"]
+    aliases = {
+        "multiview_match": "multiview",
+        "view": "multiview",
+    }
     deduped: list[str] = []
     for name in names:
+        name = aliases.get(name, name)
         if name not in deduped:
             deduped.append(name)
     return deduped
 
 
 def configure_logger(log_path: Path) -> logging.Logger:
-    logger = logging.getLogger("visualize_results")
+    logger = logging.getLogger("visualize")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
     logger.propagate = False

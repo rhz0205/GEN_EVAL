@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from reference import ReferencePreparer
+from models.executor import run_prepare_reference_stage
 
 try:
     import yaml
@@ -25,20 +26,22 @@ DEFAULT_RUN_CONFIG = Path("configs/run.yaml")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Prepare reference data and write enriched data outputs.")
+    parser = argparse.ArgumentParser(description="Generate reference data and write enriched outputs.")
     parser.add_argument("--config", default=str(DEFAULT_REFERENCE_CONFIG), help="Path to reference config YAML.")
     parser.add_argument("--run-config", default=str(DEFAULT_RUN_CONFIG), help="Path to run config YAML.")
+    parser.add_argument("--profile", default=None, help="Optional run profile override, for example debug or eval.")
     parser.add_argument("--data-path", default=None, help="Input data JSON path override.")
     parser.add_argument("--manifest", default=None, help="Alias for --data-path.")
     parser.add_argument("--output-path", default=None, help="Enriched data output path override.")
     parser.add_argument("--output-dir", default=None, help="Output root override.")
     parser.add_argument("--summary-path", default=None, help="Reference summary path override.")
+    parser.add_argument("--print-config", action="store_true", help="Print resolved runtime and paths before execution.")
     return parser
 
 
 def require_yaml() -> None:
     if yaml is None:
-        print("PyYAML is required to load YAML config files for scripts/prepare_references.py.", file=sys.stderr)
+        print("PyYAML is required to load YAML config files for scripts/generate_references.py.", file=sys.stderr)
         raise SystemExit(2)
 
 
@@ -59,8 +62,8 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
 def get_run_config(payload: dict[str, Any]) -> dict[str, Any]:
     run_config = payload.get("run")
     if isinstance(run_config, dict):
-        return run_config
-    return payload
+        return dict(run_config)
+    return dict(payload)
 
 
 def require_string(payload: dict[str, Any], key: str) -> str:
@@ -107,25 +110,57 @@ def resolve_output_root(args: argparse.Namespace, run_config: dict[str, Any]) ->
     return Path("outputs") / dataset_name / f"{data_count}_{timestamp}"
 
 
+def resolve_runtime_config(run_config: dict[str, Any]) -> dict[str, Any]:
+    runtime: dict[str, Any] = {}
+    base_runtime = run_config.get("runtime")
+    if isinstance(base_runtime, dict):
+        runtime.update(base_runtime)
+
+    profile_name = run_config.get("profile")
+    profiles = run_config.get("profiles")
+    if isinstance(profile_name, str) and profile_name and isinstance(profiles, dict):
+        selected = profiles.get(profile_name)
+        if isinstance(selected, dict):
+            profile_runtime = selected.get("runtime")
+            if isinstance(profile_runtime, dict):
+                runtime.update(profile_runtime)
+    return runtime
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
     run_payload = load_yaml(args.run_config)
     run_config = get_run_config(run_payload)
+    if args.profile:
+        run_config["profile"] = str(args.profile)
     reference_config = load_yaml(args.config)
 
     data_path = resolve_input_data(args, run_config)
     output_root = resolve_output_root(args, run_config)
     output_path = Path(args.output_path) if args.output_path else output_root / "results" / "enriched_data.json"
     summary_path = Path(args.summary_path) if args.summary_path else output_root / "results" / "reference_summary.json"
+    runtime_config = resolve_runtime_config(run_config)
 
-    preparer = ReferencePreparer(reference_config)
-    summary = preparer.prepare(
+    if args.print_config:
+        payload = {
+            "profile": run_config.get("profile"),
+            "runtime": runtime_config,
+            "data_path": str(data_path),
+            "output_dir": str(output_root),
+            "output_path": str(output_path),
+            "summary_path": str(summary_path),
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+    summary = run_prepare_reference_stage(
+        reference_config=reference_config,
         data_path=data_path,
         output_path=output_path,
         summary_path=summary_path,
         output_dir=output_root,
+        runtime_config=runtime_config,
     )
 
     print(f"samples={summary['num_samples']} generators={summary['num_generators']} failed={len(summary['failed_samples'])}")
