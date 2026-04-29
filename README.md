@@ -57,6 +57,20 @@ Basic commands:
 - `python scripts/summarize_results.py --help`
 - `python scripts/visualize_results.py --help`
 
+Dataset and reference protocol:
+
+- A valid sample must contain a non-empty `sample_id`.
+- A valid sample must contain `metadata.camera_videos` as a non-empty object.
+- `metadata.camera_videos` must contain all expected 6 views defined by the dataset config.
+- Each expected camera view path must be non-empty. Path existence checks are optional and controlled by the caller.
+- `scripts/random_select.py` writes `results/data_inspection.json` first and stops early if dataset inspection reports a structural error.
+- `scripts/random_select.py` accepts `--dataset-config` so dataset inspection and selection can use the same dataset config path as evaluation.
+- `GenEval.evaluate()` only evaluates `load_valid_samples()` and no longer evaluates samples that fail dataset inspection.
+- When reference preparation writes `results/enriched_data.json`, it must preserve the dataset entry protocol used by `src/dataset/`.
+- Reference generators may append prepared fields under `metadata`, such as `semantic_masks`, `semantic_num_classes`, and `semantic_ignore_label`.
+- Reference generators must not overwrite protected dataset-entry fields such as `metadata.camera_videos`.
+- If `enriched_data.json` breaks the dataset protocol, evaluation now fails at dataset inspection before module execution.
+
 Notes:
 
 - `semantic_consistency.py` reads prepared semantic masks and does not run OpenSeeD inference directly.

@@ -92,6 +92,8 @@ class ViewConsistency(BaseModule):
             "status": status,
             "num_samples": len(samples),
             "valid_sample_count": len(valid_scores),
+            "skipped_sample_count": len(skipped_samples),
+            "failed_sample_count": len(failed_samples),
             "valid_evaluated_count": len(valid_scores),
             "mean_view_consistency_score": view_consistency_score,
             "view_consistency_score": view_consistency_score,

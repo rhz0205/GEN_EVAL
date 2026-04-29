@@ -74,6 +74,8 @@ class DepthConsistency(BaseModule):
                 "status": "skipped",
                 "num_samples": len(samples),
                 "valid_sample_count": 0,
+                "skipped_sample_count": 0,
+                "failed_sample_count": 0,
                 "mean_depth_consistency_score": None,
                 "details": {
                     "evaluated_samples": [],
@@ -128,6 +130,8 @@ class DepthConsistency(BaseModule):
             "status": status,
             "num_samples": len(samples),
             "valid_sample_count": len(valid_scores),
+            "skipped_sample_count": len(skipped_samples),
+            "failed_sample_count": len(failed_samples),
             "mean_depth_consistency_score": mean_score,
             "details": {
                 "evaluated_samples": evaluated_samples,

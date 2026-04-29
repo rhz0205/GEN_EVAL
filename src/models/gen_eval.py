@@ -108,7 +108,15 @@ class GenEval:
     def evaluate(self) -> dict[str, Any]:
         data_path = self.result_paths["enriched_data_path"] if self.result_paths["enriched_data_path"].exists() else self.data_file
         dataset = self._build_dataset(data_path=data_path)
-        samples = dataset.load()
+        inspection = dataset.inspect()
+        if inspection.get("error"):
+            raise ValueError(f"Dataset inspection failed: {inspection['error']}")
+
+        samples = dataset.load_valid_samples()
+        if not samples:
+            raise ValueError("No valid samples were found for evaluation.")
+        num_samples = len(samples)
+
         modules = self._build_modules()
 
         metrics_result: dict[str, Any] = {}
@@ -119,7 +127,7 @@ class GenEval:
                 metrics_result[module_name] = {
                     "metric": module_name,
                     "status": "failed",
-                    "num_samples": len(samples),
+                    "num_samples": num_samples,
                     "error": f"{type(exc).__name__}: {exc}",
                     "details": {
                         "evaluated_samples": [],
@@ -135,6 +143,7 @@ class GenEval:
             data_count=self.data_count,
             timestamp=self.timestamp,
             data_file=data_path,
+            num_samples=num_samples,
         )
         write_summary_result(
             metrics_result=metrics_result,
@@ -145,6 +154,7 @@ class GenEval:
             timestamp=self.timestamp,
             data_file=data_path,
             output_dir=self.output_dir,
+            num_samples=num_samples,
         )
         return payload
 
@@ -160,7 +170,14 @@ class GenEval:
             dataset = self._build_dataset(data_path=self.data_file)
             inspection = dataset.inspect()
             write_json(inspection, self.result_paths["inspection_path"])
-            stage_results["inspect_data"] = {"status": "success", "path": str(self.result_paths["inspection_path"])}
+            if inspection.get("error"):
+                stage_results["inspect_data"] = {
+                    "status": "failed",
+                    "path": str(self.result_paths["inspection_path"]),
+                    "reason": str(inspection["error"]),
+                }
+            else:
+                stage_results["inspect_data"] = {"status": "success", "path": str(self.result_paths["inspection_path"])}
 
         if stages.get("prepare_reference", False):
             reference_result = self.prepare_reference()
@@ -169,7 +186,18 @@ class GenEval:
         metrics_payload: dict[str, Any] | None = None
         if stages.get("evaluate", False):
             metrics_payload = self.evaluate()
-            stage_results["evaluate"] = {"status": "success", "path": str(self.result_paths["metrics_path"])}
+            evaluate_status = "success"
+            evaluate_reason = None
+            metric_results = metrics_payload.get("results") if isinstance(metrics_payload, dict) else None
+            if isinstance(metric_results, dict):
+                for item in metric_results.values():
+                    if isinstance(item, dict) and item.get("status") == "failed":
+                        evaluate_status = "failed"
+                        evaluate_reason = "One or more metrics failed."
+                        break
+            stage_results["evaluate"] = {"status": evaluate_status, "path": str(self.result_paths["metrics_path"])}
+            if evaluate_reason is not None:
+                stage_results["evaluate"]["reason"] = evaluate_reason
 
         if stages.get("summarize", False):
             if self.result_paths["metrics_path"].exists():
@@ -186,6 +214,7 @@ class GenEval:
                     timestamp=self.timestamp,
                     data_file=metrics_payload.get("data_file", self.data_file),
                     output_dir=self.output_dir,
+                    num_samples=metrics_payload.get("num_samples") if isinstance(metrics_payload.get("num_samples"), int) else None,
                 )
                 stage_results["summarize"] = {"status": "success", "path": str(self.result_paths["summary_path"])}
             else:

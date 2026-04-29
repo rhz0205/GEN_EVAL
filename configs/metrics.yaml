@@ -4,32 +4,32 @@ metrics:
     device: cuda
     batch_size: 1
   temporal_consistency:
-    enabled: true
+    enabled: false
     model_path: pretrained_models/temporal/model.pt
     device: cuda
     batch_size: 1
   appearance_consistency:
-    enabled: true
+    enabled: false
     model_path: pretrained_models/appearance/model.pt
     device: cuda
     batch_size: 1
   depth_consistency:
-    enabled: true
+    enabled: false
     model_path: pretrained_models/depth/model.pt
     device: cuda
     batch_size: 1
   semantic_consistency:
-    enabled: true
+    enabled: false
     repo_path: src/third_party/OpenSeeD
     device: cuda
     batch_size: 1
   instance_consistency:
-    enabled: true
+    enabled: false
     model_path: pretrained_models/instance/model.pt
     device: cuda
     batch_size: 1
   view_consistency:
-    enabled: true
+    enabled: false
     model_path: pretrained_models/view/model.pt
     device: cuda
     batch_size: 1

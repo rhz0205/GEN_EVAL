@@ -97,6 +97,8 @@ class InstanceConsistency(BaseModule):
             "status": status,
             "num_samples": len(samples),
             "valid_sample_count": len(valid_scores),
+            "skipped_sample_count": len(skipped_samples),
+            "failed_sample_count": len(failed_samples),
             "mean_instance_consistency_score": mean_score,
             "details": {
                 "evaluated_samples": evaluated_samples,

@@ -1,9 +1,9 @@
 reference:
-  enabled: true
+  enabled: false
   continue_on_error: false
   generators:
     openseed_semantic:
-      enabled: true
+      enabled: false
       class_name: OpenSeeDReference
       input_key: camera_videos
       output_key: semantic_masks

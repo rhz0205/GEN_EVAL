@@ -15,6 +15,7 @@ DATASET_REGISTRY: dict[str, type[BaseDataset]] = {
 
 
 def build_dataset(dataset_name: str, dataset_config: dict[str, Any]) -> BaseDataset:
+    """Build a dataset from the registry."""
     dataset_class = DATASET_REGISTRY.get(dataset_name)
     if dataset_class is None:
         expected = ", ".join(sorted(DATASET_REGISTRY))

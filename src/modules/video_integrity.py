@@ -74,6 +74,8 @@ class VideoIntegrity(BaseModule):
             "num_samples": len(samples),
             "valid_sample_count": valid_sample_count,
             "invalid_sample_count": invalid_sample_count,
+            "skipped_sample_count": len(skipped_samples),
+            "failed_sample_count": len(failed_samples),
             "pass_rate": pass_rate,
             "details": {
                 "evaluated_samples": evaluated_samples,

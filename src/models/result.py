@@ -51,24 +51,11 @@ def build_summary(metrics_result: dict[str, Any]) -> dict[str, Any]:
             continue
 
         item: dict[str, Any] = {"status": result.get("status", "unknown")}
-        for key in (
-            "pass_rate",
-            "view_consistency_score",
-            "mean_view_consistency_score",
-            "mean_temporal_consistency_score",
-            "mean_appearance_consistency_score",
-            "mean_depth_consistency_score",
-            "mean_semantic_consistency_score",
-            "mean_instance_consistency_score",
-            "valid_sample_count",
-            "invalid_sample_count",
-        ):
-            if key in result:
-                item[key] = result.get(key)
-        if "reason" in result:
-            item["reason"] = result.get("reason")
-        if "error" in result:
-            item["error"] = result.get("error")
+        for key, value in result.items():
+            if key in {"metric", "status", "details"}:
+                continue
+            if _is_summary_scalar(value):
+                item[key] = value
 
         summary[metric_name] = item
         if item["status"] == "failed":
@@ -106,13 +93,14 @@ def write_metrics_result(
     data_count: int,
     timestamp: str,
     data_file: str | Path,
+    num_samples: int | None = None,
 ) -> dict[str, Any]:
     payload = {
         "dataset_name": dataset_name,
         "data_count": data_count,
         "timestamp": timestamp,
         "data_file": str(data_file),
-        "num_samples": _infer_num_samples(metrics_result),
+        "num_samples": num_samples if isinstance(num_samples, int) else _infer_num_samples(metrics_result),
         "results": metrics_result,
     }
     write_json(payload, path)
@@ -129,6 +117,7 @@ def write_summary_result(
     timestamp: str,
     data_file: str | Path,
     output_dir: str | Path,
+    num_samples: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     summary_payload = {
         "dataset_name": dataset_name,
@@ -136,13 +125,16 @@ def write_summary_result(
         "timestamp": timestamp,
         "data_file": str(data_file),
         "output_dir": str(output_dir),
-        "num_samples": _infer_num_samples(metrics_result),
+        "num_samples": num_samples if isinstance(num_samples, int) else _infer_num_samples(metrics_result),
         "summary": build_summary(metrics_result),
     }
     failed_samples_payload = {
         "dataset_name": dataset_name,
         "data_count": data_count,
         "timestamp": timestamp,
+        "data_file": str(data_file),
+        "output_dir": str(output_dir),
+        "num_samples": num_samples if isinstance(num_samples, int) else _infer_num_samples(metrics_result),
         "failed_samples": collect_failed_samples(metrics_result),
     }
     write_json(summary_payload, summary_path)
@@ -157,3 +149,7 @@ def _infer_num_samples(metrics_result: dict[str, Any]) -> int | None:
             if isinstance(value, int):
                 return value
     return None
+
+
+def _is_summary_scalar(value: Any) -> bool:
+    return value is None or isinstance(value, (str, int, float, bool))

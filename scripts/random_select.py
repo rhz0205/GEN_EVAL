@@ -25,18 +25,23 @@ except ImportError:
 
 DEFAULT_CONFIG_PATH = Path("configs/run.yaml")
 DEFAULT_DATASET_CONFIG_PATH = Path("configs/dataset.yaml")
-DEFAULT_SAMPLE_SIZE = 10
+DEFAULT_SAMPLE_SIZE = 10  # 抽检样本数量
 DEFAULT_SEED = 42
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Inspect a worldbench data file and select random valid samples.",
+        description="Inspect a generative data file and select random valid samples.",
     )
     parser.add_argument(
         "--config",
         default=str(DEFAULT_CONFIG_PATH),
         help="Path to the run config YAML file.",
+    )
+    parser.add_argument(
+        "--dataset-config",
+        default=str(DEFAULT_DATASET_CONFIG_PATH),
+        help="Path to the dataset config YAML file.",
     )
     parser.add_argument(
         "--sample-size",
@@ -174,8 +179,8 @@ def resolve_seed(args: argparse.Namespace, run_config: dict[str, Any]) -> int:
     return DEFAULT_SEED
 
 
-def load_dataset_entry(dataset_name: str) -> dict[str, Any]:
-    payload = load_yaml(DEFAULT_DATASET_CONFIG_PATH)
+def load_dataset_entry(dataset_name: str, dataset_config_path: str | Path) -> dict[str, Any]:
+    payload = load_yaml(Path(dataset_config_path))
     datasets = get_datasets_config(payload)
     entry = datasets.get(dataset_name)
     if not isinstance(entry, dict):
@@ -241,26 +246,25 @@ def main() -> int:
     sample_size = resolve_sample_size(args, run_config)
     seed = resolve_seed(args, run_config)
 
-    dataset_entry = load_dataset_entry(dataset_name)
+    dataset_entry = load_dataset_entry(dataset_name, args.dataset_config)
     dataset_entry["data_file"] = str(data_file)
     dataset = build_dataset(dataset_name, dataset_entry)
 
     results_dir, _, log_path = ensure_output_paths(output_dir)
     logger = configure_logger(log_path)
 
+    logger.info("Resolved dataset config path: %s", args.dataset_config)
     logger.info("Resolved data file path: %s", data_file)
     logger.info("Resolved output directory: %s", output_dir)
     logger.info("Path checking enabled: %s", args.check_paths)
 
     inspection = dataset.inspect(check_paths=args.check_paths)
-    valid_samples = [sample.to_dict() for sample in dataset.load_valid_samples(check_paths=args.check_paths)]
-    selected_samples = select_samples(valid_samples, sample_size, seed)
-
     inspection_payload = {
         "dataset_name": dataset_name,
         "data_count": data_count,
         "timestamp": timestamp,
         "data_file": str(data_file),
+        "samples_format_valid": inspection["samples_format_valid"],
         "num_samples": inspection["num_samples"],
         "num_valid_samples": inspection["num_valid_samples"],
         "num_invalid_samples": inspection["num_invalid_samples"],
@@ -270,6 +274,18 @@ def main() -> int:
         ),
         "invalid_samples": inspection["invalid_samples"],
     }
+    if "error" in inspection:
+        inspection_payload["error"] = inspection["error"]
+
+    write_json(results_dir / "data_inspection.json", inspection_payload)
+
+    if "error" in inspection:
+        logger.error("Dataset inspection failed: %s", inspection["error"])
+        return 1
+
+    valid_samples = [sample.to_dict() for sample in dataset.load_valid_samples(check_paths=args.check_paths)]
+    selected_samples = select_samples(valid_samples, sample_size, seed)
+
     selected_payload = {
         "dataset_name": dataset_name,
         "data_count": data_count,
@@ -280,7 +296,6 @@ def main() -> int:
         "selected_samples": selected_samples,
     }
 
-    write_json(results_dir / "data_inspection.json", inspection_payload)
     write_json(results_dir / "selected_samples.json", selected_payload)
 
     logger.info("Number of samples: %s", inspection["num_samples"])

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ REFERENCE_ALIASES: dict[str, str] = {
 }
 
 _REFERENCE_CLASS_CACHE: dict[str, type[ReferenceGenerator]] = {}
+PROTECTED_METADATA_KEYS: tuple[str, ...] = ("camera_videos",)
 
 
 def _load_reference_class(module_path: str, class_name: str) -> type[ReferenceGenerator]:
@@ -84,11 +86,30 @@ def set_samples(payload: Any, samples: list[dict[str, Any]]) -> Any:
 def merge_metadata(metadata: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     merged = dict(metadata)
     for key, value in patch.items():
+        if key in PROTECTED_METADATA_KEYS:
+            raise ValueError(f"Reference generators must not overwrite protected metadata key: {key}")
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = {**merged[key], **value}
         else:
             merged[key] = value
     return merged
+
+
+def infer_run_context(data_path: str | Path) -> dict[str, Any]:
+    path = Path(data_path)
+    match = re.fullmatch(r"(?P<dataset_name>[a-zA-Z0-9]+)_(?P<data_count>\d+)_(?P<timestamp>\d+)", path.stem)
+    if not match:
+        return {
+            "dataset_name": None,
+            "data_count": None,
+            "timestamp": None,
+        }
+    groups = match.groupdict()
+    return {
+        "dataset_name": groups["dataset_name"],
+        "data_count": int(groups["data_count"]),
+        "timestamp": groups["timestamp"],
+    }
 
 
 class ReferencePreparer:
@@ -118,6 +139,7 @@ class ReferencePreparer:
         samples = extract_samples(raw_payload)
         reference_root = Path(output_dir)
         reference_root.mkdir(parents=True, exist_ok=True)
+        run_context = infer_run_context(source_path)
 
         enriched_samples: list[dict[str, Any]] = []
         failed_samples: list[dict[str, Any]] = []
@@ -127,7 +149,14 @@ class ReferencePreparer:
 
         for sample in samples:
             enriched_sample = deepcopy(sample)
-            metadata = dict(enriched_sample.get("metadata") or {})
+            raw_metadata = enriched_sample.get("metadata")
+            if raw_metadata is None:
+                metadata = {}
+            elif isinstance(raw_metadata, dict):
+                metadata = dict(raw_metadata)
+            else:
+                sample_id = str(enriched_sample.get("sample_id") or "unknown")
+                raise ValueError(f"sample {sample_id} metadata must be an object.")
             enriched_sample["metadata"] = metadata
             sample_id = str(enriched_sample.get("sample_id") or "unknown")
             sample_failures: list[dict[str, str]] = []
@@ -158,6 +187,11 @@ class ReferencePreparer:
         write_json(output_path, enriched_payload)
         summary = {
             "status": "success",
+            "dataset_name": run_context["dataset_name"],
+            "data_count": run_context["data_count"],
+            "timestamp": run_context["timestamp"],
+            "data_file": str(Path(source_path)),
+            "output_dir": str(Path(output_dir)),
             "num_samples": len(samples),
             "num_generators": len(self.generators),
             "enriched_data_path": str(Path(output_path)),

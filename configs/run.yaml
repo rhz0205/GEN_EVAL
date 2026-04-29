@@ -7,7 +7,7 @@ run:
     output_dir: outputs/sample/20_202604280811
   stages:
     inspect_data: true
-    prepare_reference: true
+    prepare_reference: false
     evaluate: true
     summarize: true
     visualize: false

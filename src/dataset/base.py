@@ -17,21 +17,29 @@ DEFAULT_CAMERA_VIEWS: tuple[str, ...] = (
 )
 
 
+# 数据文件路径 -> 读取 JSON -> 抽取样本列表 -> 检查样本格式 -> 规范化样本 -> 转成 GenerationSample
 def load_json(path: str | Path) -> Any:
+    """Load JSON data from a file."""
     json_path = Path(path)
     with json_path.open("r", encoding="utf-8") as file:
         return json.load(file)
 
 
 def extract_samples(payload: Any) -> list[Any]:
+    """Extract the list of samples from the loaded JSON payload.
+    Return list[Any]
+    """
     if isinstance(payload, list):
         return payload
     if isinstance(payload, dict) and isinstance(payload.get("samples"), list):
         return payload["samples"]
-    raise ValueError("Data JSON must be a top-level list or an object containing a 'samples' list.")
+    raise ValueError(
+        "Data JSON must be a top-level list or an object containing a 'samples' list."
+    )
 
 
 def load_data_records(path: str | Path) -> list[dict[str, Any]]:
+    """Load the raw data records from the JSON file, without any validation or normalization."""
     records = extract_samples(load_json(path))
     return [item for item in records if isinstance(item, dict)]
 
@@ -44,20 +52,40 @@ class BaseDataset:
         configured_name = self.config.get("name")
         self.name = str(configured_name).strip() if configured_name else self.name
         self.data_file = Path(str(self.config.get("data_file", "")).strip())
-        self.camera_videos_key = str(
-            self.config.get("camera_videos_key", "camera_videos")
-        ).strip() or "camera_videos"
+        self.camera_videos_key = (
+            str(self.config.get("camera_videos_key", "camera_videos")).strip()
+            or "camera_videos"
+        )
         expected_camera_views = self.config.get("expected_camera_views")
         if isinstance(expected_camera_views, list) and expected_camera_views:
-            self.expected_camera_views = tuple(str(item) for item in expected_camera_views)
+            self.expected_camera_views = tuple(
+                str(item) for item in expected_camera_views
+            )
         else:
             self.expected_camera_views = DEFAULT_CAMERA_VIEWS
 
     def load(self) -> list[GenerationSample]:
+        """Load and normalize all samples from the dataset, without checking for validity."""
         records = extract_samples(self.load_payload())
-        return [self.normalize_sample(record, index=index) for index, record in enumerate(records)]
+        return [
+            self.normalize_sample(record, index=index)
+            for index, record in enumerate(records)
+        ]
 
     def inspect(self, *, check_paths: bool = False) -> dict[str, Any]:
+        """
+        dataset_name              数据集名称
+        data_file                 数据文件路径
+        camera_videos_key         相机视频字段名
+        expected_camera_views     期望相机视角
+        file_exists               数据文件是否存在
+        samples_format_valid      样本列表格式是否有效
+        num_samples               样本总数
+        num_valid_samples         有效样本数
+        num_invalid_samples       无效样本数
+        check_paths               是否检查路径存在性
+        invalid_samples           无效样本详情
+        """
         summary: dict[str, Any] = {
             "dataset_name": self.name,
             "data_file": str(self.data_file),
@@ -75,8 +103,13 @@ class BaseDataset:
             summary["error"] = f"Data file does not exist: {self.data_file}"
             return summary
 
-        payload = load_json(self.data_file)
-        records = extract_samples(payload)
+        try:
+            payload = load_json(self.data_file)
+            records = extract_samples(payload)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            summary["error"] = f"{type(exc).__name__}: {exc}"
+            return summary
+
         summary["samples_format_valid"] = True
         summary["num_samples"] = len(records)
 
@@ -98,11 +131,15 @@ class BaseDataset:
         summary["invalid_samples"] = invalid_samples
         return summary
 
-    def load_valid_samples(self, *, check_paths: bool = False) -> list[GenerationSample]:
+    def load_valid_samples(
+        self, *, check_paths: bool = False
+    ) -> list[GenerationSample]:
         records = extract_samples(self.load_payload())
         valid_samples: list[GenerationSample] = []
         for index, record in enumerate(records):
-            _, reasons = self.inspect_sample(record, index=index, check_paths=check_paths)
+            _, reasons = self.inspect_sample(
+                record, index=index, check_paths=check_paths
+            )
             if reasons:
                 continue
             valid_samples.append(self.normalize_sample(record, index=index))
@@ -121,7 +158,9 @@ class BaseDataset:
 
         sample_id = str(record.get("sample_id", "")).strip()
         if not sample_id:
-            raise ValueError(f"Sample at index {index} must define a non-empty sample_id.")
+            raise ValueError(
+                f"Sample at index {index} must define a non-empty sample_id."
+            )
 
         metadata = record.get("metadata")
         if metadata is None:
@@ -137,8 +176,17 @@ class BaseDataset:
 
         normalized = dict(record)
         normalized["sample_id"] = sample_id
-        normalized["generated_video"] = self._normalize_generated_video(record.get("generated_video"))
-        normalized["metadata"] = dict(metadata)
+        normalized["generated_video"] = self._normalize_generated_video(
+            record.get("generated_video")
+        )
+        normalized_metadata = dict(metadata)
+        if isinstance(camera_videos, dict):
+            normalized_metadata[self.camera_videos_key] = {
+                str(view): str(path)
+                for view, path in camera_videos.items()
+                if path is not None
+            }
+        normalized["metadata"] = normalized_metadata
         return GenerationSample.from_dict(normalized)
 
     def inspect_sample(
@@ -167,13 +215,17 @@ class BaseDataset:
 
         camera_videos = metadata.get(self.camera_videos_key)
         if camera_videos is None:
-            return sample_id, reasons
+            return sample_id, reasons + [
+                f"metadata['{self.camera_videos_key}'] is required"
+            ]
         if not isinstance(camera_videos, dict):
             return sample_id, reasons + [
                 f"metadata['{self.camera_videos_key}'] must be a dict when provided"
             ]
 
-        missing_views = [view for view in self.expected_camera_views if view not in camera_videos]
+        missing_views = [
+            view for view in self.expected_camera_views if view not in camera_videos
+        ]
         if missing_views:
             reasons.append(f"missing expected camera views: {', '.join(missing_views)}")
 

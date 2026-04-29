@@ -50,6 +50,8 @@ class AppearanceConsistency(BaseModule):
                 "status": "skipped",
                 "num_samples": len(samples),
                 "valid_sample_count": 0,
+                "skipped_sample_count": 0,
+                "failed_sample_count": 0,
                 "mean_appearance_consistency_score": None,
                 "details": {
                     "evaluated_samples": [],
@@ -92,14 +94,20 @@ class AppearanceConsistency(BaseModule):
                 skipped_samples.append(simplify_sample_result(sample_result))
 
         mean_score = mean_or_none(valid_scores)
-        status = "success" if mean_score is not None else "skipped"
-        reason = None if mean_score is not None else "No valid appearance consistency score."
+        if mean_score is not None:
+            status = "success"
+            reason = None
+        else:
+            status = "failed" if failed_samples else "skipped"
+            reason = "No valid appearance consistency score."
 
         result: dict[str, Any] = {
             "metric": self.name,
             "status": status,
             "num_samples": len(samples),
             "valid_sample_count": len(valid_scores),
+            "skipped_sample_count": len(skipped_samples),
+            "failed_sample_count": len(failed_samples),
             "mean_appearance_consistency_score": mean_score,
             "details": {
                 "evaluated_samples": evaluated_samples,
